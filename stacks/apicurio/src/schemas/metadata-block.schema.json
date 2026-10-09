@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schema.pearson.com/contracts/apicurio/metadata-block/v1",
+  "title": "Pearson schema metadata block",
+  "description": "The governance metadata block every schema registered in Apicurio must carry, declared in the schema BODY. This file is the machine-readable statement of the contract that app/services/metadata_validator.py enforces at runtime: checks 3-8 map one-to-one onto the constraints below. The body is authoritative; the same values are mirrored into Apicurio v3 `labels` as a derived query index (ADR-0001), and a disagreement between the two is reported as the `properties_mismatch` rule rather than silently reconciled. Keep this file and the validator in step — if they diverge, the validator is what actually runs.",
+  "type": "object",
+  "required": ["metadata"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "description": "Validator check 3 (`metadata_block_missing`): a top-level `metadata` object must be present.",
+      "required": ["owner", "domain", "dataClassification", "lifecycle"],
+      "additionalProperties": true,
+      "properties": {
+        "owner": {
+          "type": "object",
+          "description": "Validator check 4 (`owner_missing`, `owner_unresolved`): `service` must be present and resolve to an ACTIVE CMDB configuration item.",
+          "required": ["service"],
+          "properties": {
+            "service": {
+              "type": "string",
+              "description": "CMDB CI ID of the owning service.",
+              "pattern": "^CI[0-9]+$",
+              "examples": ["CI0093421"]
+            },
+            "team": {
+              "type": "string",
+              "description": "CMDB team ID.",
+              "examples": ["TM-COMMERCE"]
+            },
+            "email": {
+              "type": "string",
+              "format": "email",
+              "description": "Distribution list, not an individual — ownership outlives people.",
+              "examples": ["commerce@pearson.com"]
+            }
+          }
+        },
+        "domain": {
+          "type": "string",
+          "description": "Validator check 5 (`domain_missing`, `domain_mismatch`): must equal the first dot-segment of the artifactId, so the registry coordinate and the declared domain cannot drift apart.",
+          "enum": [
+            "learning",
+            "assessment",
+            "content",
+            "credentials",
+            "identity",
+            "product",
+            "customer",
+            "commerce",
+            "finance",
+            "analytics",
+            "partner",
+            "platform"
+          ]
+        },
+        "dataClassification": {
+          "type": "string",
+          "description": "Validator check 6 (`classification_missing`, `classification_invalid`).",
+          "enum": ["public", "internal", "confidential", "restricted"]
+        },
+        "lifecycle": {
+          "type": "string",
+          "description": "Validator check 7 (`lifecycle_missing`, `lifecycle_invalid`).",
+          "enum": ["active", "deprecated"]
+        },
+        "piiFields": {
+          "type": "array",
+          "description": "Validator check 8: each entry must resolve to a real field in the schema body — `fields[].name` for Avro, a `properties` key for JSON Schema — and the WHOLE dotted path is followed, not just its first segment, so a typo below the top level is caught (`pii_field_not_found`). A leading `$.` is stripped first, and an array is TRANSPARENT: name the field directly (`contributors.contributorGivenName`), because a subscript picks an element and every element has the same fields — `contributors[].x` and `contributors[0].x` are accepted and mean the same thing. An entry that names no field at all (an empty string, '$.' or '...') is rejected as `pii_field_malformed` rather than passing silently. Absent or empty means no PII is declared — which is a claim, not an absence of obligation.",
+          "items": {
+            "type": "string",
+            "examples": ["$.customerId", "learner.email", "contributors.contributorGivenName"]
+          },
+          "default": []
+        }
+      }
+    }
+  },
+  "$comment": "Checks 1 (`schema_type_unsupported`) and 2 (`body_unparseable`) are not expressible here: they gate on the Apicurio artifact type and on the body being parseable JSON at all, both of which precede any schema-level validation. Check 1 no longer means Avro-only (UIFPE-597): AVRO and JSON bodies both run every constraint below, and a gold attribute mapping is detected by body shape and validated against standards/gold-attribute-mapping.schema.json instead, since its contract never asked it to carry a metadata block. PROTOBUF, GRAPHQL, XSD, OPENAPI and ASYNCAPI still short-circuit before these constraints are ever applied. See ../../ARCHITECTURE.md."
+}

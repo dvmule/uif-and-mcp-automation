@@ -1,0 +1,270 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Apigateway",
+      "Effect": "Allow",
+      "Action": [
+        "apigateway:DELETE",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:POST",
+        "apigateway:PUT",
+        "apigateway:TagResource",
+        "apigateway:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:apigateway:eu-west-1::/apis",
+        "arn:aws:apigateway:eu-west-1::/apis/*",
+        "arn:aws:apigateway:eu-west-1::/tags/*"
+      ]
+    },
+    {
+      "Sid": "Cloudwatch",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DeleteDashboards",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:PutDashboard",
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:cloudwatch::283556840805:dashboard/uif-echo-uat-*",
+        "arn:aws:cloudwatch:eu-west-1:283556840805:alarm:uif-echo-uat-*"
+      ]
+    },
+    {
+      "Sid": "Ec2Unscopable",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateTags",
+        "ec2:CreateVpcEndpoint",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeTags",
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeVpcs"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "Events",
+      "Effect": "Allow",
+      "Action": [
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:DisableRule",
+        "events:EnableRule",
+        "events:ListTagsForResource",
+        "events:ListTargetsByRule",
+        "events:PutRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:TagResource",
+        "events:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:events:eu-west-1:283556840805:rule/uif-echo-uat-*"
+      ]
+    },
+    {
+      "Sid": "EventsControlBus",
+      "Effect": "Allow",
+      "Action": [
+        "events:CreateEventBus",
+        "events:DeleteEventBus",
+        "events:DescribeEventBus",
+        "events:ListTagsForResource",
+        "events:TagResource",
+        "events:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:events:eu-west-1:283556840805:event-bus/uif-event-uat-*"
+      ]
+    },
+    {
+      "Sid": "GlueUnscopable",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetConnections",
+        "glue:GetDatabases",
+        "glue:GetJobs",
+        "glue:GetTags",
+        "glue:GetTriggers"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "IamLakeformationSlr",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:PutRolePolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::283556840805:role/aws-service-role/lakeformation.amazonaws.com/AWSServiceRoleForLakeFormationDataAccess"
+      ]
+    },
+    {
+      "Sid": "IamOidcRead",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetOpenIDConnectProvider"
+      ],
+      "Resource": [
+        "arn:aws:iam::283556840805:oidc-provider/token.actions.githubusercontent.com"
+      ]
+    },
+    {
+      "Sid": "IamStackRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:ListRolePolicies",
+        "iam:ListRoleTags",
+        "iam:PassRole",
+        "iam:PutRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:UpdateRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::283556840805:role/uif-echo-uat-*"
+      ]
+    },
+    {
+      "Sid": "IamUnscopable",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListOpenIDConnectProviders"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "LakeformationUnscopable",
+      "Effect": "Allow",
+      "Action": [
+        "lakeformation:AddLFTagsToResource",
+        "lakeformation:DeregisterResource",
+        "lakeformation:DescribeResource",
+        "lakeformation:GetResourceLFTags",
+        "lakeformation:GrantPermissions",
+        "lakeformation:ListPermissions",
+        "lakeformation:RegisterResource",
+        "lakeformation:RemoveLFTagsFromResource",
+        "lakeformation:RevokePermissions"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "LogsUnscopable",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:DescribeLogGroups",
+        "logs:DescribeResourcePolicies",
+        "logs:GetLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:UpdateLogDelivery"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "S3Unscopable",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListAllMyBuckets"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "Secretsmanager",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:uif/echo/uat/*"
+      ]
+    },
+    {
+      "Sid": "Sqs",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:ListQueueTags",
+        "sqs:SetQueueAttributes",
+        "sqs:TagQueue",
+        "sqs:UntagQueue"
+      ],
+      "Resource": [
+        "arn:aws:sqs:eu-west-1:283556840805:uif-echo-uat-*"
+      ]
+    },
+    {
+      "Sid": "StsSelf",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "Wafv2RulegroupRead",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:GetRuleGroup"
+      ],
+      "Resource": [
+        "arn:aws:wafv2:us-east-1:283556840805:global/rulegroup/PCMSanctionsRuleGroupCloudFront/*"
+      ]
+    },
+    {
+      "Sid": "Wafv2Unscopable",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:ListRuleGroups"
+      ],
+      "Resource": [
+        "*"
+      ]
+    }
+  ]
+}

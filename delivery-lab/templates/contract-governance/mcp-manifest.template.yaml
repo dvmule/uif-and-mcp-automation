@@ -1,0 +1,41 @@
+# Starter template — agent (MCP tool manifest) contract, governed by Apicurio.
+# Copy into domains/<domain>/src/mcp/mcp-manifest.yaml.
+# Naming, annotations, transport rules: ../../../capabilities/mcp/guidelines.md
+# Registry coordinate + compatibility rule: ../../../stacks/apicurio/standards/guidelines.md §1
+# Apicurio governance lifecycle (MCP as a governed artifact type): ../../../stacks/apicurio/standards/apicurio-governance.md §2
+server:
+  name: <domain>-mcp-server
+  transport: streamable-http   # stdio for local/dev only — capabilities/mcp/guidelines.md §2
+x-registry:
+  group: <domain>
+  artifact: <domain>-mcp-server
+  compatibility: BACKWARD
+tools:
+  - name: get_<resource>
+    description: >
+      <What this tool does, in one sentence an agent's user would understand.>
+    # Never redefine the shape inline — $ref the domain's own already-
+    # registered API or event schema (capabilities/mcp/guidelines.md §2).
+    inputSchema:
+      $ref: "../api/openapi.yaml#/components/schemas/Get<Resource>Request"
+    outputSchema:
+      $ref: "../api/openapi.yaml#/components/schemas/<Resource>"
+    annotations:
+      readOnlyHint: true
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false
+  - name: register_<resource>
+    description: >
+      <A write/create tool — shown to illustrate the destructiveHint contract
+      MCP's human-in-the-loop policy relies on. Delete this example tool if
+      this server has no write operations yet.>
+    inputSchema:
+      $ref: "../api/openapi.yaml#/components/schemas/Register<Resource>Request"
+    outputSchema:
+      $ref: "../api/openapi.yaml#/components/schemas/<Resource>"
+    annotations:
+      readOnlyHint: false
+      destructiveHint: false
+      idempotentHint: true
+      openWorldHint: false

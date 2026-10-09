@@ -1,0 +1,7 @@
+# Paths OUTSIDE this stack that apicurio's own tests read. See
+# stacks/echo/ci-watch for why this file exists (UIFPE-728).
+
+# qe/tests/release/test_check_version_sh.py asserts every stack's copy of
+# check-version.sh is byte-identical, so a change to any copy must run this
+# stack's CI too.
+stacks/*/scripts/check-version.sh

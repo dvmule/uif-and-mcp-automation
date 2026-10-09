@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Refuses a commit that would be authored by an address Jira cannot match.
+#
+# Checked before the message rather than after, because a wrong author is the
+# failure that leaves no trace: the commit succeeds, the Jira command is
+# discarded silently, and the misattribution is permanent once pushed.
+set -uo pipefail
+
+root=$(git rev-parse --show-toplevel)
+
+# git var applies the same precedence git itself will use for the commit,
+# including GIT_AUTHOR_EMAIL and `git -c user.email=...` overrides.
+email=$(git var GIT_AUTHOR_IDENT | sed -E 's/.*<([^>]*)>.*/\1/')
+
+exec "$root/.githooks/lint-identity.sh" --email "$email"

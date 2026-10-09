@@ -1,0 +1,240 @@
+name: Deploy product — UAT
+
+# THREE INDEPENDENT HALVES, and the split is the point of this file.
+#
+#   gold    schema + mapping artefacts and the gold pipeline config row.
+#           Needs NO Terraform: the artefact sync is a plain `aws s3 sync` to
+#           an existing bucket and the config sync writes DynamoDB. This is
+#           the half that makes product a registered gold entity in uat — the
+#           same thing price, program and stock already have.
+#
+#   plan    the DOMAIN Terraform root: marketing-copy service and event
+#           delivery (ADR-0018 — pipeline and compute belong to the echo
+#           stack, schema/mapping/event delivery to the domain). Produces a
+#           plan file and nothing else.
+#
+#   apply   consumes that saved plan. A separate job, so the `uat` environment
+#           approval for the apply is requested AFTER the plan exists and can
+#           be read. Mirrors deploy-product-prod.yml, which already does this.
+#
+# WHY THEY ARE SEPARATE JOBS (UIFPE-669). They used to be one job, with
+# `make plan && make apply` mid-sequence and the gold steps after it. Two
+# problems, both of which this split fixes:
+#
+#   1. The plan fails in uat on a cross-stack dependency that is legitimately
+#      absent. `data.aws_lambda_function.dlq_recorder` reads
+#      uif-event-uat-dlq-recorder, and the event stack has never been deployed
+#      to uat. A data source for a missing resource is a hard PLAN failure, so
+#      the step died and took the gold steps with it — product could not
+#      register in uat for a reason that has nothing to do with gold.
+#   2. `make plan` and `make apply` ran back to back, so the plan was only ever
+#      a log entry after the fact. For a root with no state, whose plan is a
+#      28-resource CREATE, the environment approval was granted before the plan
+#      existed, so the approver could not have been approving the plan.
+#
+# Terraform is therefore OPT-IN. Leave `terraform` at `skip` until UIFPE-669
+# closes; the gold half runs either way.
+
+on:
+  workflow_dispatch:
+    inputs:
+      terraform:
+        description: "Domain Terraform root (marketing-copy + event delivery): skip | plan | apply"
+        required: false
+        default: skip
+        type: choice
+        options: [skip, plan, apply]
+
+concurrency:
+  group: deploy-product-uat
+  cancel-in-progress: false
+
+jobs:
+  # ── the half that needs no Terraform ──────────────────────────────────────
+  gold:
+    name: Gold artefacts + config (${{ github.ref_name }})
+    # THE REF MUST BE A RELEASE TAG, and this is not a style choice: the
+    # `uat` environment's deployment policy admits only tags, with NO branch
+    # entries, so a dispatch on develop is refused by the environment. The
+    # previous branch guard therefore made this workflow unrunnable — a tag
+    # dispatch skipped the job and a branch dispatch was rejected, with no ref
+    # satisfying both (UIFPE-656). Dispatch on the tag that
+    # product-release.yml cut, which is also what pins the deployed version.
+    if: startsWith(github.ref, 'refs/tags/product/v')
+    runs-on: ubuntu-latest
+    environment: uat
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: uat
+    steps:
+      - uses: actions/checkout@v4
+
+      # PRODUCT_UAT_DEPLOY_ENABLED, NOT PRODUCT_DEPLOY_ENABLED: the latter is
+      # the DEV latch and is already 'true', so sharing it left uat effectively
+      # unlatched. Unset (the default) evaluates to != 'true', so this fails
+      # closed.
+      - name: Cutover latch
+        if: vars.PRODUCT_UAT_DEPLOY_ENABLED != 'true'
+        run: |
+          echo "::error::Deploys are latched OFF (repo variable PRODUCT_UAT_DEPLOY_ENABLED != 'true')."
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Test gate
+        run: |
+          pip install -r domains/product/qe/requirements-dev.txt
+          python -m pytest domains/product/qe -q
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # AWS_ROLE_ARN_ECHO_UAT, not AWS_ROLE_ARN_UAT. The latter is a
+          # repo-level secret holding the APICURIO uat role, and assuming it
+          # here fails on the first S3 call: "uif-apicurio-uat-deploy-role is
+          # not authorized to perform s3:ListBucket on uif-echo-uat-gold-artifacts".
+          # A domain uat deploy writes echo resources -- the gold artefacts
+          # bucket and the gold pipeline config table -- so it needs echo's uat
+          # role, which is what promote-echo.yml assumes for the same estate.
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ECHO_UAT }}
+          aws-region: eu-west-1
+
+      - name: Upload Glue scripts (gold/ prefix — ours alone)
+        run: |
+          # DO NOT change the "gold/" prefix in the destination below — the
+          # platform's own deploy runs `s3 sync glue_jobs/ --delete` against
+          # this same bucket and will purge anything of ours placed outside
+          # this prefix. Only the source path is re-rooted for the monorepo.
+          echo "Glue scripts ship from stacks/echo/infrastructure/terraform-gold (ADR-0018 step 2)"
+
+      # UIFPE-117: --delete scoped PER ENTITY — the destination prefix is
+      # shared across gold domains, so a domain-wide --delete would purge
+      # another domain's artifacts. See deploy-product-dev.yml for the full
+      # rationale.
+      - name: Sync schema + mapping artifacts
+        run: |
+          for d in domains/product/src/schemas/gold/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/schemas/gold/$entity" --delete
+          done
+          for d in domains/product/src/schemas/mapping/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/mappings/$entity" --delete --exclude "*.mapping.json"
+          done
+
+      - name: Sync pipeline configs (config-as-code)
+        run: python stacks/echo/src/apps/cli/sync_pipelines.py --env $ENV --apply
+
+      # Said out loud because a green run here is easy to over-read: the first
+      # transform run creates the Glue database, not this sync, so a
+      # "SKIP <database> (not created yet)" line above is correct and not a
+      # failure. The uat overlay commits `enabled: false`, and `enabled` is
+      # console-owned (sync_pipelines.RUNTIME_PATHS, UIFPE-564) — enable it from
+      # the Syncs page when the team is ready to watch a run.
+      - name: What this did not do
+        run: |
+          echo "Registered the config row. The pipeline is DISABLED and no Glue database exists yet."
+          echo "Terraform (marketing-copy + event delivery) was not run by this job."
+
+  # ── the domain Terraform root, opt-in ─────────────────────────────────────
+  plan:
+    name: Terraform plan (${{ github.ref_name }})
+    if: >-
+      startsWith(github.ref, 'refs/tags/product/v') &&
+      inputs.terraform != 'skip'
+    runs-on: ubuntu-latest
+    environment: uat
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: uat
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cutover latch
+        if: vars.PRODUCT_UAT_DEPLOY_ENABLED != 'true'
+        run: |
+          echo "::error::Deploys are latched OFF (repo variable PRODUCT_UAT_DEPLOY_ENABLED != 'true')."
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Test gate
+        run: |
+          pip install -r domains/product/qe/requirements-dev.txt
+          python -m pytest domains/product/qe -q
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ECHO_UAT }}
+          aws-region: eu-west-1
+
+      - uses: hashicorp/setup-terraform@v3
+
+      # EXPECTED TO FAIL while UIFPE-669 is open, on the missing
+      # uif-event-uat-dlq-recorder. That is the whole reason this is its own
+      # job: the failure is legible here and no longer blocks the gold job.
+      - name: Terraform plan
+        working-directory: domains/product/infrastructure/terraform
+        run: |
+          make init ENV=$ENV
+          make plan ENV=$ENV
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-tfplan
+          path: domains/product/infrastructure/terraform/uat.tfplan
+          retention-days: 7
+
+  apply:
+    name: Terraform apply (${{ github.ref_name }})
+    # A SECOND environment approval, deliberately. `needs: plan` means the plan
+    # artefact already exists when this job requests its approval, so the
+    # approver is approving a plan they can read rather than an intention.
+    if: >-
+      startsWith(github.ref, 'refs/tags/product/v') &&
+      inputs.terraform == 'apply'
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: uat
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: uat
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ECHO_UAT }}
+          aws-region: eu-west-1
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: uat-tfplan
+          path: domains/product/infrastructure/terraform
+
+      # `make apply` consumes the SAVED plan (terraform apply $(ENV).tfplan) and
+      # does NOT re-plan. Re-planning here would apply something the approver
+      # never saw, which is the defect this split exists to remove.
+      - name: Terraform apply
+        working-directory: domains/product/infrastructure/terraform
+        run: |
+          make init ENV=$ENV
+          make apply ENV=$ENV

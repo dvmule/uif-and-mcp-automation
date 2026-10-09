@@ -1,0 +1,72 @@
+# Shared MCP platform/environment configuration - PLATFORM-SCOPE, owned by the MCP capability
+# and kept beside the shared MCP tooling (capabilities/mcp/mcp-bridge.md). Read ONCE per run and
+# reused by every domain's route in the shared Bridge; never duplicated into a domain's
+# bridge-config.yaml.
+#
+# TWO KINDS OF VALUE, deliberately kept apart:
+#   * ENVIRONMENT-SPECIFIC COORDINATES are `${VAR}` placeholders resolved at run time from the
+#     environment by platform_config.py - in GitHub Actions from the selected GitHub ENVIRONMENT's
+#     variables (dev today; uat/prod later by adding an Environment with the same variable names,
+#     no code change), locally from the shell. Nothing is invented: a missing variable fails the
+#     run closed, naming it. The resolved copy is a build artifact under build/mcp/ and every
+#     downstream script receives it through --platform-config; this file is never modified.
+#   * ARCHITECTURE / DESIGN values stay literal here, reviewed in Git: the shared Bridge identity
+#     (uif-domains-mcp), its listener base path (/uif/domains), the MCP transport path (/mcp), the
+#     naming conventions (REST asset uif-<domain>-api, source instance uif-<domain>-<env>).
+#
+# Credentials are NEVER here: ANYPOINT_CLIENT_ID / ANYPOINT_CLIENT_SECRET are GitHub Environment
+# SECRETS read by the live scripts themselves.
+#
+# NOT configured here (by design):
+#   gateway_version   -> discovered dynamically at deployment time from the gateway target
+#   mcp asset version -> resolved/captured by the pipeline's publish stage
+#
+# One block per UIF environment. uat / prod: deliberately absent - DEV-only automation for now;
+# adding one is a block below plus a GitHub Environment carrying the same variables.
+dev:
+  # Anypoint coordinates (UUIDs; validated as such by platform_config.py)
+  org_id: ${ANYPOINT_ORG_ID}                      # Anypoint business group / organization id
+  env_id: ${ANYPOINT_ENV_ID}                      # Anypoint environment id of UIF dev
+  gateway_id: ${ANYPOINT_GATEWAY_ID}              # the shared Flex Gateway target (shared DEV gateway)
+  gateway_name: ${ANYPOINT_GATEWAY_NAME}          # its display name (informational; identity is the id)
+  # Consumer-facing host of the shared gateway: agent endpoint = https://<gateway_public_host>/<shared_bridge.base_path>/mcp
+  # (used by the pipeline's conformance stage). A bare host name - no scheme, path or port.
+  gateway_public_host: ${ANYPOINT_GATEWAY_PUBLIC_HOST}
+  # Shared TLS context reused by the shared Bridge on the gateway (secret group + TLS context ids)
+  # tls_secret_group_id: ${ANYPOINT_TLS_SECRET_GROUP_ID}
+  # tls_context_id: ${ANYPOINT_TLS_CONTEXT_ID}
+  # COMMON UIF API UPSTREAM ORIGIN: scheme + host only, NO base path - the one origin every UIF
+  # domain API of this environment is served from, shared by ALL domains (present and future) and
+  # NOT repeated in any domains/<domain>/src/mcp/bridge-config.yaml. shared_bridge.effective_config
+  # injects it as environments.<env>.upstream_url for every domain that does not set one; the
+  # pipeline reuses/creates the Exchange external instance uif-<domain>-<env> at this origin and
+  # binds the domain's route to it. DESIGN RULE (composed by the gateway at call time):
+  #     final backend URL = this ORIGIN + domain OpenAPI servers[0] path + operation path
+  # generate_mcp_metadata.py puts servers[0] path + operation path into every tool mapping, so a
+  # domain's contract remains authoritative for its base path. platform_config.py refuses a value
+  # that carries a path. A domain-specific environments.<env>.upstream_url in bridge-config.yaml is
+  # an OVERRIDE for a requirement we intentionally support later - not the default.
+  upstream_url: ${UIF_UPSTREAM_ORIGIN}
+  # ONE shared MCP Bridge for ALL UIF domain APIs of this environment (decided 2026-09-29): every
+  # domain deployment RECONCILES its own route (upstream + connection + tools) into this Bridge and
+  # preserves every other domain's. Shared-scope identity - a domain never chooses a Bridge label,
+  # MCP asset, listener path or transport path of its own. ARCHITECTURE: literal, reviewed in Git.
+  # Naming convention (decided 2026-09-30): REST asset uif-<domain>-api (default,
+  # shared_bridge.effective_config), external source instance uif-<domain>-<env>
+  # (ensure_source_instance.py), shared MCP asset AND Bridge uif-domains-mcp.
+  shared_bridge:
+    instance_label: uif-domains-mcp   # API Manager instance label of the shared Bridge
+    mcp_asset_id: uif-domains-mcp     # the ONE Exchange MCP asset the Bridge binds (tools of all domains);
+                                      # its version moves independently of any domain's REST release
+    # base_path = the shared Bridge's listener path (agent endpoint https://<gateway_public_host>/<base_path>/mcp).
+    # Confirmed 2026-09-30 for the existing uif-domains-mcp Bridge. The update identity guard refuses a
+    # Bridge whose listener path differs from this value.
+    base_path: /uif/domains
+    transcoding_path: /mcp            # MCP transport path (one per Bridge)
+    # Optional fail-closed guard: identities the automation must NEVER resolve, publish to, bind or
+    # mutate (checked at the effective-config step and before every remote write). Empty here.
+    # protected:
+    #   instance_labels: []
+    #   mcp_asset_ids: []
+    #   rest_asset_ids: []
+    #   source_instance_names: []

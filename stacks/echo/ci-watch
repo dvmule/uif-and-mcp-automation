@@ -1,0 +1,52 @@
+# Paths OUTSIDE this stack that echo's own tests read.
+#
+# stacks-ci.yml builds its matrix from the stacks a diff touches. A test that
+# reads another stack's file therefore cannot fire on the change that breaks
+# it -- the breaking change runs a matrix that excludes the test. Every
+# pattern here also selects echo's matrix entry. UIFPE-728.
+#
+# One pattern per line, git pathspec syntax, # for comments. The detect step
+# REFUSES a pattern matching no tracked file, so a stale entry fails loudly
+# rather than silently watching nothing.
+
+# ui/src/lib/__tests__/tokenParity.test.ts compares Echo's index.css with
+# Beacon's theme.css. UIFPE-716 changed Beacon's values on 2026-09-30, echo's
+# CI never ran, and six assertions sat broken on develop until an unrelated
+# Terraform PR inherited them (UIFPE-727).
+stacks/beacon/ui/src/theme.css
+
+# qe/pipeline/test_check_version_sh.py asserts every stack's copy of
+# check-version.sh is byte-identical. UIFPE-690 added event's copy with a
+# different default the same day; echo's CI never ran (UIFPE-730).
+stacks/*/scripts/check-version.sh
+
+# qe/gold/test_compile_intake_delta.py validates the mappings it emits against
+# apicurio's copy of the gold-attribute-mapping schema. Proven live: adding a
+# required key to that schema fails the test, and nothing would have run it.
+stacks/apicurio/standards/gold-attribute-mapping.schema.json
+
+# transform-ui's suite asserts against the REGISTERED domain artifacts, by
+# design (journey.test.ts: "checked against production data where it exists").
+# Six import.meta.glob patterns reach across into domains/, so a domain change
+# is a change to this stack's test inputs. Gated from 2026-09-30 (UIFPE-738) --
+# before that transform-ui ran nowhere, and five of its tests had been failing
+# on develop against domain data that had moved on.
+domains/*/DOMAIN-CHECKLIST.md
+domains/*/src/apps/pipelines/base/*.yaml
+domains/*/src/schemas/gold/*/*/master.json
+domains/*/src/schemas/mapping/*/v1/*.mapping.json
+domains/*/src/schemas/mapping/*/v1/manifest.yaml
+domains/*/src/schemas/mapping/*/v1/sql/*.sql
+
+# test_ui_waf.py's TestWafv2DescriptionsSatisfyAwsOwnRegex checks the wafv2
+# description regex across EVERY stack that has a web ACL, not just echo's.
+# AWS rejects a description Terraform plans clean, so it fails partway through
+# an apply. Apicurio hit it first (UIFPE-36), echo hit the same class on its
+# first-ever apply (UIFPE-756); neither fix added a check, which is why it
+# recurred. Without this path the guard never runs on an apicurio change.
+stacks/apicurio/infrastructure/terraform/waf.tf
+
+# test_ui_waf.py's TestIpSetCidrsAreOnesAwsAccepts checks every stack's IP-set
+# CIDRs against the one prefix wafv2 refuses (/0). Same shape as the
+# description guard above: Terraform plans it clean and the apply fails.
+stacks/apicurio/infrastructure/terraform/envs/*.tfvars

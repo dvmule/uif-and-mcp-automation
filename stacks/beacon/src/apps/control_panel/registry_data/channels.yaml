@@ -1,0 +1,56 @@
+# Delivery channel registry (admin-owned adapter types, D16). Partner
+# ENDPOINTS are not here — authors create those via POST /destinations.
+# requires_credential: false means the channel authenticates via IAM (the
+# pipeline's own role) — no secret is collected for its destinations.
+
+- id: s3
+  adapters: [s3_copy]
+  status: available
+  requires_credential: false
+  destination_schema:
+    type: object
+    required: [destination_s3_prefix]
+    properties:
+      destination_s3_prefix: {type: string, pattern: "^s3://"}
+
+- id: email
+  # UIFPE-444: re-enabled on the Pearson Notifications API (owner decision
+  # 2026-09-16 — Pearson product, not AWS SES). The mail carries NO links;
+  # its Download button opens the export's page on the Beacon panel. The
+  # platform credentials live in Secrets Manager (uif/beacon/{env}/
+  # notifications/api) — authors never supply a credential.
+  adapters: [pearson_notifications]
+  status: available
+  requires_credential: false
+  destination_schema:
+    type: object
+    required: [recipients]
+    properties:
+      recipients:
+        type: array
+        minItems: 1
+        items: {type: string, format: email}
+
+- id: sftp
+  # paramiko retired at UIFPE-438 — delivery rides Transfer Family connectors
+  adapters: [transfer_family]
+  status: available
+  requires_credential: true
+  credential_schema:
+    type: object
+    required: [host, username]
+    properties:
+      host: {type: string}
+      port: {type: integer, default: 22}
+      username: {type: string}
+      password: {type: string}
+      private_key_pem: {type: string}
+      host_key: {type: string, description: base64, pinned on connect}
+
+- id: gcs
+  adapters: []
+  status: planned
+
+- id: sharepoint
+  adapters: []
+  status: planned

@@ -1,0 +1,94 @@
+# Starter template — sync (OpenAPI 3.1) contract, governed by Apicurio.
+# Copy into domains/<domain>/src/api/<entity>/openapi.yaml (ADR-0022 decision 4)
+# and fill in every <PLACEHOLDER>.
+# Naming, versioning, and security rules: ../../../capabilities/api/guidelines.md
+# Registry coordinate + compatibility rule: ../../../stacks/apicurio/standards/guidelines.md §1
+# Apicurio governance lifecycle: ../../../stacks/apicurio/standards/apicurio-governance.md
+openapi: 3.1.0
+info:
+  title: <Domain> <Resource> API
+  version: 1.0.0
+  description: >
+    <One paragraph: what this API serves, and which entity/table/service it
+    is a read or write surface over. Owned by the <domain> domain — contact
+    that domain's FDE about breaking changes.>
+  contact:
+    name: <domain> domain FDE
+x-registry:
+  group: <domain>
+  artifact: <domain>-<resource>-api
+  compatibility: BACKWARD   # BACKWARD | FORWARD | FULL | NONE — stacks/apicurio/standards/guidelines.md §2
+servers:
+  - url: /api/v1
+tags:
+  - name: <resource>
+security:
+  - EntraID: [api://<domain>-api/<resource>.read]
+  - bearerAuth: []
+paths:
+  /<resources>:
+    get:
+      operationId: list<Resources>
+      summary: List <resources> (paginated)
+      tags: [<resource>]
+      parameters:
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: One page of <resources>.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/<Resource>Page' }
+        '400':
+          description: Invalid pagination parameters.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+components:
+  schemas:
+    <Resource>Page:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/<Resource>' }
+        nextCursor:
+          type: [string, 'null']
+    <Resource>:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        # Canonical shared entity — registry-coordinate $ref, never a locally
+        # redefined copy (stacks/apicurio/standards/apicurio-governance.md §3).
+        billingAddress:
+          $ref: 'https://schemas.pearson.com/common/address/v1'
+        price:
+          $ref: 'https://schemas.pearson.com/common/money/v1'
+    Problem:
+      # RFC 7807 Problem Details — capabilities/api/guidelines.md §4.
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+  securitySchemes:
+    EntraID:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+          scopes:
+            api://<domain>-api/<resource>.read: Read <resource> data
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

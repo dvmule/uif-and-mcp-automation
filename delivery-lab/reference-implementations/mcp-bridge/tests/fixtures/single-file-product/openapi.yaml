@@ -1,0 +1,489 @@
+# Product Data API — the registered contract (API First: written before code).
+# Field eligibility is governed by ../schemas/mapping/product/v1/product.mapping.json: only columns
+# with channels.api == true appear in the Product schema below. The contract test
+# asserts the two never drift.
+openapi: 3.1.0
+info:
+  title: Product Data API
+  version: 2.0.0
+  description: >
+    Read API over the gold_product.product table (S3 + Athena). Exposes only the
+    columns whose mapping declares channels.api: true in
+    domains/product/src/schemas/mapping/product/v1/product.mapping.json. Owned by the product domain
+    (Four-in-a-Box FDE) — contact the product domain team about breaking changes.
+# Apicurio registry coordinate — stacks/apicurio/standards/guidelines.md §1,
+# stacks/apicurio/standards/apicurio-governance.md. Artifact id matches the
+# security scope already in use below (api://product-api/...).
+x-registry:
+  group: product
+  artifact: product-api
+  compatibility: BACKWARD
+servers:
+  - url: /api/v1
+tags:
+  - name: products
+security:
+  - EntraID: [api://product-api/product.read]
+  - bearerAuth: []
+paths:
+  /products:
+    get:
+      operationId: listProducts
+      summary: List products (paginated)
+      description: >
+        Returns all API-eligible columns for every product, newest-first,
+        cursor-paginated. Never returns an unbounded list.
+      tags: [products]
+      parameters:
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+          description: Maximum items per page.
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque cursor from a previous page's nextCursor.
+      responses:
+        '200':
+          description: One page of products.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductPage' }
+              example:
+                items:
+                  - productId: "PPID000123"
+                    organizationCode: "01B"
+                    itemType: "DIGITAL"
+                    description: "Introduction to Statistics"
+                    isbn13: "9780134685991"
+                    contributors:
+                      - contributorId: "C-001"
+                        contributionRoleCode: "author"
+                        contributorSortSequence: 1
+                        contributorGivenName: "Ada"
+                        contributorFamilyName: "Lovelace"
+                nextCursor: null
+        '400':
+          description: Invalid pagination parameters.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500':
+          description: Unexpected server error.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /products/columns:
+    get:
+      operationId: listProductColumns
+      summary: List the API-eligible product columns
+      description: >
+        Returns the names of every product column that can be requested through
+        the API (channels.api true in the product mapping) - the exact set
+        accepted by the columns field of /products/query. Sorted, unpaginated.
+      tags: [products]
+      responses:
+        '200':
+          description: The API-eligible column names.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductColumns' }
+              example:
+                columns: [description, isbn13, productId]
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500':
+          description: Unexpected server error.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+  /products/query:
+    post:
+      operationId: queryProducts
+      summary: Return selected columns only
+      description: >
+        Accepts a list of column names and returns just those values for each
+        product, cursor-paginated. Every requested column must be API-eligible
+        (channels.api true in the product mapping); an unknown or ineligible
+        column is rejected with a 400 problem naming the offending columns.
+      tags: [products]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductQueryRequest' }
+            example:
+              columns: [ppid, description, isbn13]
+              pageSize: 50
+      responses:
+        '200':
+          description: One page of column-projected products.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProductQueryPage' }
+              example:
+                items:
+                  - productId: "PPID000123"
+                    description: "Introduction to Statistics"
+                    isbn13: "9780134685991"
+                nextCursor: null
+        '400':
+          description: Unknown or non-API-eligible column requested, or invalid body.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '500':
+          description: Unexpected server error.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+components:
+  securitySchemes:
+    EntraID:
+      type: openIdConnect
+      openIdConnectUrl: https://login.microsoftonline.com/<tenant-id>/v2.0/.well-known/openid-configuration
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Workload-to-workload calls federate the caller's ServiceAccount token to
+        Entra ID via OIDC and present it as this bearer token; validate iss/aud/scopes
+        exactly as for the EntraID scheme above.
+  schemas:
+    # Exactly the channels.api: true columns of product.mapping.json — no more, no less.
+    Product:
+      type: object
+      required: [productId, organizationCode]
+      properties:
+        productId:
+          type: string
+          description: Pearson Product Identifier. Always starts with 'A' (products only).
+        organizationCode:
+          type: string
+          description: Pearson organisation code from MTL_PARAMETERS.
+        description:
+          type: [string, 'null']
+          description: Description (Internal)
+        longDescription:
+          type: [string, 'null']
+          description: Description (External)
+        itemType:
+          type: [string, 'null']
+          description: User Item Type
+        lineOfBusiness:
+          type: [string, 'null']
+        disciplineLevel1:
+          type: [string, 'null']
+        disciplineLevel2:
+          type: [string, 'null']
+        disciplineLevel3:
+          type: [string, 'null']
+        disciplineLevel4:
+          type: [string, 'null']
+        languageLevel1:
+          type: [string, 'null']
+        languageLevel2:
+          type: [string, 'null']
+        learnerStageLevel1:
+          type: [string, 'null']
+        learnerStageLevel2:
+          type: [string, 'null']
+        digitalEffectiveStartDate:
+          type: [string, 'null']
+          format: date
+        digitalVersionNumber:
+          type: [string, 'null']
+        unitWeightQuantity:
+          type: [number, 'null']
+        weightUomCode:
+          type: [string, 'null']
+        unitLengthQuantity:
+          type: [number, 'null']
+        unitWidthQuantity:
+          type: [number, 'null']
+        unitHeightQuantity:
+          type: [number, 'null']
+        dimensionUomCode:
+          type: [string, 'null']
+        fulfillmentOrgDetails.returnClassCode:
+          type: [string, 'null']
+        qualificationLevelName:
+          type: [string, 'null']
+        isbn13:
+          type: [string, 'null']
+        isbn10:
+          type: [string, 'null']
+        sourceItemNumber:
+          type: [string, 'null']
+        owningSubsidiaryCountryCode:
+          type: [string, 'null']
+        owningSubsidiaryName:
+          type: [string, 'null']
+        ipOwnerCategory:
+          type: [string, 'null']
+        copyrightYear:
+          type: [integer, 'null']
+        editionNumber:
+          type: [integer, 'null']
+        productClassificationLevel1:
+          type: [string, 'null']
+        productClassificationLevel2:
+          type: [string, 'null']
+        deliveryMethod:
+          type: [string, 'null']
+        brand:
+          type: [string, 'null']
+        subBrand:
+          type: [string, 'null']
+        digitalPlatform:
+          type: [string, 'null']
+        finalTextPageCount:
+          type: [integer, 'null']
+        fulfillmentOrgDetails.sellingRestrictionCode:
+          type: [string, 'null']
+        fulfillmentOrgDetails.discountCode:
+          type: [string, 'null']
+        fulfillmentOrgDetails.titleStatusCode:
+          type: [string, 'null']
+        fulfillmentOrgDetails.regionalPublicationDate:
+          type: [string, 'null']
+          format: date
+        accessDurationType:
+          type: [string, 'null']
+        accessDurationQuantity:
+          type: [string, 'null']
+        accessDurationUnitCode:
+          type: [string, 'null']
+        coverImageLargeUrl:
+          type: [string, 'null']
+        coverImageRegularUrl:
+          type: [string, 'null']
+        coverImageHighResolutionUrl:
+          type: [string, 'null']
+        fulfillmentOrgDetails.imprintName:
+          type: [string, 'null']
+        contributors:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/Contributor' }
+        webConsumingSystem:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/WebConsumingSystem' }   # struct since UIFPE-270
+        associatedPrograms:
+          type: [array, 'null']
+          items: { type: string }
+        marketingCopy:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/MarketingCopy' }
+        # ── 2026-08-17 batch ──
+        parentProductId:
+          type: [string, 'null']
+        inventoryItemStatus:
+          type: [string, 'null']
+        nonDisclosureAgreementIndicator:
+          type: [boolean, 'null']
+        fulfillmentOrgDetails.productTaxClassificationCode:
+          type: [string, 'null']
+        fulfillmentOrgDetails.relevanceValue:
+          type: [string, 'null']
+        fulfillmentOrgDetails.backOrderIndicator:
+          type: [boolean, 'null']
+        fulfillmentOrgDetails.defaultSalesOrderSourceTypeCode:
+          type: [string, 'null']
+        fulfillmentOrgDetails.readyForManufactureCode:
+          type: [string, 'null']
+        standardComponents:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/StandardComponent' }
+        customComponents:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/CustomComponent' }
+        categories:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/ProductCategory' }
+        # ── 2026-09-07 batch (UIFPE-270) ──
+        courseDurationQuantity:
+          type: [string, 'null']
+        courseDurationUnitCode:
+          type: [string, 'null']
+        productUrl:
+          type: [string, 'null']
+        enablingTechnology:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/EnablingTechnology' }
+        fulfillmentOrgDetails.marketingInitiative:
+          type: [array, 'null']
+          items: { $ref: '#/components/schemas/MarketingInitiative' }
+    WebConsumingSystem:
+      type: object
+      additionalProperties: false
+      properties:
+        wcsName: { type: string }
+        endDate: { type: [string, 'null'], format: date }
+    EnablingTechnology:
+      type: object
+      additionalProperties: false
+      properties:
+        enablingTechnologyLevel1: { type: [string, 'null'] }
+        enablingTechnologyLevel2: { type: [string, 'null'] }
+    MarketingInitiative:
+      type: object
+      additionalProperties: false
+      properties:
+        marketingInitiativeName: { type: [string, 'null'] }
+        marketingInitiativeStartDate: { type: [string, 'null'], format: date }
+        marketingInitiativeEndDate: { type: [string, 'null'], format: date }
+    StandardComponent:
+      type: object
+      additionalProperties: false
+      properties:
+        componentProductId: { type: string }
+        sequenceNumber: { type: [integer, 'null'] }
+        componentQuantity: { type: [number, 'null'] }
+        componentEffectiveDate: { type: [string, 'null'], format: date }
+        componentFinalPageCount: { type: [integer, 'null'] }
+        discountType: { type: [string, 'null'] }
+        discountAmount: { type: [number, 'null'] }
+        componentDisabledDate: { type: [string, 'null'], format: date }
+    CustomComponent:
+      type: object
+      additionalProperties: false
+      properties:
+        componentProductId: { type: string }
+        originalWorkPercent: { type: [number, 'null'] }
+        customWorkPercent: { type: [number, 'null'] }
+        componentEffectiveDate: { type: [string, 'null'], format: date }
+        componentFinalPageCount: { type: [integer, 'null'] }
+        overridePercent: { type: [number, 'null'] }
+        componentDisabledDate: { type: [string, 'null'], format: date }
+    Contributor:
+      type: object
+      properties:
+        contributorId: { type: [string, 'null'] }
+        contributionRoleCode: { type: [string, 'null'] }
+        contributorSortSequence: { type: [integer, 'null'] }
+        contributorPreNominalTitle: { type: [string, 'null'] }
+        contributorGivenName: { type: [string, 'null'] }
+        contributorAdditionalName: { type: [string, 'null'] }
+        contributorFamilyName: { type: [string, 'null'] }
+        contributorPostNominalTitle: { type: [string, 'null'] }
+        affiliationType1: { type: [string, 'null'] }
+        affiliation1: { type: [string, 'null'] }
+        affiliationType2: { type: [string, 'null'] }
+        affiliation2: { type: [string, 'null'] }
+        affiliationType3: { type: [string, 'null'] }
+        affiliation3: { type: [string, 'null'] }
+    MarketingCopy:
+      type: object
+      properties:
+        contentId: { type: [string, 'null'] }
+        marketingCopyText: { type: [string, 'null'] }
+        marketingCopyTypeCode: { type: [string, 'null'] }
+        audienceCode: { type: [string, 'null'] }
+        geoVisibilityCode: { type: [string, 'null'] }
+        owningMarketCode: { type: [string, 'null'] }
+        contentUrl:
+          type: [string, 'null']
+          description: Retrieval URL for the full marketing copy (content service, UIFPE-253/254)
+    ProductCategory:
+      type: object
+      description: >
+        One category the product is mapped to, from an in-scope category set
+        (EPT, POA, Private Pay (POA)). A product may hold several entries in
+        the same set.
+      properties:
+        categorySetName:
+          type: [string, 'null']
+          description: Category set the assignment belongs to, e.g. EPT.
+        categoryCode:
+          type: [string, 'null']
+          description: Business code of the mapped category. Not the surrogate id.
+        categoryName:
+          type: [string, 'null']
+          description: US label of the mapped category, e.g. Aerodynamics.
+        categoryHierarchyPath:
+          type: [string, 'null']
+          description: >
+            Root-to-mapped path joined with ' > ', e.g.
+            "Engineering > Mechanical Engineering > Aerodynamics". The
+            separator is ' > ' and not a slash because 3.6% of category
+            labels contain a '/' of their own ("DC / AC Circuits"), which
+            would make a slash-joined path impossible to split. Safe to
+            split on ' > ' and prefix-matchable.
+        categoryId:
+          type: [integer, 'null']
+          description: Surrogate key of the mapped category.
+        ecatalogIncludeIndicator:
+          type: [boolean, 'null']
+          description: True where the source e-catalog inclusion flag is Y, false where N; null where unset.
+        categoryDisabledDate:
+          type: [string, 'null']
+          format: date
+          description: Date the category was disabled; null while active.
+    ProductPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Product' }
+        nextCursor:
+          type: [string, 'null']
+          description: Pass as ?cursor= to fetch the next page; null on the last page.
+    ProductColumns:
+      type: object
+      required: [columns]
+      properties:
+        columns:
+          type: array
+          items: { type: string }
+          description: Sorted API-eligible column names (accepted by ProductQueryRequest.columns).
+    ProductQueryRequest:
+      type: object
+      required: [columns]
+      additionalProperties: false
+      properties:
+        columns:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: API-eligible column names from the product mapping.
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+        cursor:
+          type: [string, 'null']
+    ProductQueryPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            description: Subset of Product limited to the requested columns.
+        nextCursor:
+          type: [string, 'null']
+    Problem:
+      type: object
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }

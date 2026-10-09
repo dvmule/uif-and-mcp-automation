@@ -1,0 +1,10 @@
+# Terraform working dirs and the archive_file build output
+terraform/.terraform/
+terraform/.build/
+*.tfplan
+*.tfstate
+*.tfstate.*
+
+# Python
+__pycache__/
+*.pyc

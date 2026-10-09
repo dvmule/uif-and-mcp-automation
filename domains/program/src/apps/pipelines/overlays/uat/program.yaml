@@ -1,0 +1,20 @@
+# Gold pipeline: program — uat overlay (deep-merged over
+# pipelines/base/program.yaml). Only per-environment values belong here.
+#
+# SEEDED DISABLED ON PURPOSE. `enabled` is console-owned
+# (sync_pipelines.RUNTIME_PATHS, UIFPE-564): this value seeds a NEW entity and
+# is preserved from the console thereafter. uat's schedule-gold-dispatch-tick
+# rule is already ENABLED, so committing `true` here would put this pipeline
+# into the dispatch rotation as soon as the config is synced. Register it
+# first, verify it, then enable it from the Syncs page.
+enabled: false
+
+schema:
+  master_s3_path: s3://uif-echo-uat-gold-artifacts/schemas/gold/program/v1/master.json
+
+mapping:
+  manifest_s3_path: s3://uif-echo-uat-gold-artifacts/mappings/program/v1/manifest.yaml
+  sql_s3_path: s3://uif-echo-uat-gold-artifacts/mappings/program/v1/sql/program.sql
+
+target:
+  s3_path: s3://uif-echo-uat-gold/program/

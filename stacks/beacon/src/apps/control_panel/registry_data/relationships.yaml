@@ -1,0 +1,68 @@
+# How each Gold table relates to another (UIFPE-580). When an author adds the
+# `related` table to a feed driven by `driving`, the wizard fills in this join
+# (UIFPE-581) instead of guessing "the first shared column".
+#
+# Owner decisions, 2026-09-24:
+#   - joins produce FLAT rows, one per match, whatever the output format;
+#     left join by default so a product without a match is kept;
+#   - the Filter step narrows rows (one org, one price list, one market) —
+#     there are no join-level options for that;
+#   - this list is declared and maintained here, never inferred from names.
+#
+# `{table}` in a condition or list stands for the feed alias of that table
+# (the wizard substitutes them); element aliases (product_copy, …) are the
+# names the spread list's fields are addressed by: alias.field for a list of
+# structs, alias.value for a list of scalars (dynamic_mapping/lists.py).
+#
+# Measured in dev 2026-09-24 (owner-run Athena, see UIFPE-580): stock 62k
+# products with one org row / 23k with 2–9; program 633k products with one
+# program / 8.5k with several, every referenced program resolves; marketing
+# copy 919k products with 1–50 copies, 146 of 384,790 referenced ids missing
+# from the library; price 256k products without a price row, up to 126 prices.
+
+# `row` is what one exported row is — the wizard's card heading and Filter
+# group label read "<Table> · <row>" (UIFPE-592), never the engine's alias.
+- driving: product
+  related: price
+  summary: "matched on product id; one row per price"
+  row: "one row per price"
+  join:
+    type: left
+    condition: "{product}.product_id = {price}.product_id"
+  unnest:
+    - list: "{price}.price_specifications"
+      alias: price_spec
+  narrow_by: ["price_spec.price_list_name", "price_spec.currency_code", "price_spec.vat_country_code"]
+
+- driving: product
+  related: stock
+  summary: "matched on product id and org code; one row per org"
+  row: "one row per org"
+  join:
+    type: left
+    condition: "{product}.product_id = {stock}.product_id AND {product}.organization_code = {stock}.organization_code"
+  narrow_by: ["{stock}.organization_code"]
+
+- driving: product
+  related: program
+  summary: "through each product's associated programs, matched on program id"
+  row: "one row per program"
+  join:
+    type: left
+    through:
+      list: "{product}.associated_programs"
+      alias: product_program
+    condition: "product_program.value = {program}.program_id"
+  narrow_by: ["{program}.program_family_catalog_code"]
+
+- driving: product
+  related: marketing_copy
+  summary: "through each product's marketing copy list, matched on content id"
+  row: "one row per copy"
+  join:
+    type: left
+    through:
+      list: "{product}.marketing_copy"
+      alias: product_copy
+    condition: "product_copy.content_id = {marketing_copy}.content_id"
+  narrow_by: ["product_copy.owning_market_code", "product_copy.audience_code", "product_copy.marketing_copy_type_code"]

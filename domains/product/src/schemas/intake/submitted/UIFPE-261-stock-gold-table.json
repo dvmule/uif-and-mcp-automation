@@ -1,0 +1,178 @@
+{
+  "task": "Transformation_Task_20260904165904",
+  "intent": "add",
+  "jobProperties": {
+    "frequency": "gold-24h",
+    "start_time": "08:15"
+  },
+  "sourceGraph": [
+    {
+      "table": "uif_echo_dev_silver_tep.xxpso_inv_stock_atp_stg",
+      "eav": false,
+      "joinType": "left",
+      "joins": []
+    }
+  ],
+  "intake": {
+    "$schema": "stacks/apicurio/standards/gold-attribute-mapping.schema.json",
+    "domain": "stock",
+    "table": "gold_stock.stock",
+    "drivingTable": "XXPSO_INV_STOCK_ATP_STG",
+    "drivingSilverTable": "uif_echo_{env}_silver_tep.xxpso_inv_stock_atp_stg",
+    "drivingFilter": "PPID IS NOT NULL",
+    "entityKey": [
+      {
+        "goldColumn": "ppid",
+        "drivingColumn": "PPID"
+      },
+      {
+        "goldColumn": "organizationCode",
+        "drivingColumn": "ORGANIZATION_CODE"
+      }
+    ],
+    "transforms": {
+      "isbn13Pick": {
+        "description": "Only true ISBN-13s reach gold: length 13 and starting with 9 (owner decision 2026-09-04); MAX picks deterministically when a key carries two ISBNs.",
+        "sqlExpr": "MAX(CASE WHEN length({x}) = 13 AND {x} LIKE '9%' THEN {x} END)"
+      },
+      "sumRounded": {
+        "description": "Total on-hand over the (ppid, organizationCode) group, rounded to the nearest integer (2 fractional source rows live 2026-09-04).",
+        "sqlExpr": "CAST(ROUND(SUM({x})) AS BIGINT)"
+      },
+      "maxOf": {
+        "description": "Latest/greatest value over the entity-key group.",
+        "sqlExpr": "MAX({x})"
+      }
+    },
+    "batch": {
+      "requestedBy": "reyasahamed.habibrahman@pearson.com",
+      "targetDate": "2026-09-04",
+      "backfillMode": "silent",
+      "newChannel": null
+    },
+    "columns": [
+      {
+        "goldColumnName": "ppid",
+        "businessDescription": "Pearson product identifier (PPID) \u2014 joins stock rows to gold_product.product",
+        "kind": "scalar",
+        "dataType": "string",
+        "source": {
+          "table": "XXPSO_INV_STOCK_ATP_STG",
+          "column": "PPID",
+          "filter": null
+        },
+        "transform": null,
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "nullable": false,
+        "notes": null
+      },
+      {
+        "goldColumnName": "isbn13",
+        "businessDescription": "ISBN-13 of the stocked product \u2014 only true 13-digit ISBNs starting with 9; other source codes map to null",
+        "kind": "scalar",
+        "dataType": "string",
+        "source": {
+          "table": "XXPSO_INV_STOCK_ATP_STG",
+          "column": "ISBN",
+          "filter": null
+        },
+        "transform": {
+          "rule": "isbn13Pick"
+        },
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "nullable": true,
+        "notes": null
+      },
+      {
+        "goldColumnName": "organizationCode",
+        "businessDescription": "Fulfillment organization code (e.g. 01E)",
+        "kind": "scalar",
+        "dataType": "string",
+        "source": {
+          "table": "XXPSO_INV_STOCK_ATP_STG",
+          "column": "ORGANIZATION_CODE",
+          "filter": null
+        },
+        "transform": null,
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "nullable": false,
+        "notes": null
+      },
+      {
+        "goldColumnName": "qtyOnHand",
+        "businessDescription": "Total on-hand quantity for this product in this organization, rounded to the nearest whole unit",
+        "kind": "scalar",
+        "dataType": "integer",
+        "source": {
+          "table": "XXPSO_INV_STOCK_ATP_STG",
+          "column": "ONHAND_QUANTITY",
+          "filter": null
+        },
+        "transform": {
+          "rule": "sumRounded"
+        },
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "nullable": false,
+        "notes": null
+      },
+      {
+        "goldColumnName": "atpDate",
+        "businessDescription": "Latest available-to-promise date for this product in this organization",
+        "kind": "scalar",
+        "dataType": "timestamp",
+        "source": {
+          "table": "XXPSO_INV_STOCK_ATP_STG",
+          "column": "ATP_DATE",
+          "filter": null
+        },
+        "transform": {
+          "rule": "maxOf"
+        },
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "nullable": true,
+        "notes": null
+      },
+      {
+        "goldColumnName": "atpFlag",
+        "businessDescription": "Available-to-promise flag (Y when any staging row in the group is ATP-eligible)",
+        "kind": "scalar",
+        "dataType": "string",
+        "source": {
+          "table": "XXPSO_INV_STOCK_ATP_STG",
+          "column": "ATP_FLAG",
+          "filter": null
+        },
+        "transform": {
+          "rule": "maxOf"
+        },
+        "channels": {
+          "event": false,
+          "message": false,
+          "api": true
+        },
+        "nullable": true,
+        "notes": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,160 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TfStateBackend",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::pearson-ingestion-framework-tfstate-283556840805",
+        "arn:aws:s3:::pearson-ingestion-framework-tfstate-283556840805/uif-beacon/*"
+      ]
+    },
+    {
+      "Sid": "StackBuckets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:Get*",
+        "s3:List*",
+        "s3:Put*",
+        "s3:DeleteObject",
+        "s3:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:s3:::uif-beacon-*",
+        "arn:aws:s3:::uif-beacon-*/*"
+      ]
+    },
+    {
+      "Sid": "DynamoDB",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTable",
+        "dynamodb:UpdateTimeToLive",
+        "dynamodb:DeleteTable",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource"
+      ],
+      "Resource": "arn:aws:dynamodb:eu-west-1:283556840805:table/uif-beacon-*"
+    },
+    {
+      "Sid": "Lambda",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:GetPolicy",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:DeleteFunction",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:ListVersionsByFunction",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListTags"
+      ],
+      "Resource": "arn:aws:lambda:eu-west-1:283556840805:function:uif-beacon-*"
+    },
+    {
+      "Sid": "EcsUnscopedApis",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RegisterTaskDefinition",
+        "ecs:DeregisterTaskDefinition",
+        "ecs:DescribeTaskDefinition",
+        "ecs:CreateCluster",
+        "ecs:TagResource",
+        "ecs:UntagResource",
+        "ecs:ListTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcsScoped",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeClusters",
+        "ecs:DeleteCluster",
+        "ecs:CreateService",
+        "ecs:DescribeServices",
+        "ecs:UpdateService",
+        "ecs:DeleteService"
+      ],
+      "Resource": [
+        "arn:aws:ecs:eu-west-1:283556840805:cluster/uif-beacon-*",
+        "arn:aws:ecs:eu-west-1:283556840805:service/uif-beacon-*/*"
+      ]
+    },
+    {
+      "Sid": "Ecr",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:DescribeRepositories",
+        "ecr:DeleteRepository",
+        "ecr:ListTagsForResource",
+        "ecr:TagResource",
+        "ecr:UntagResource",
+        "ecr:PutLifecyclePolicy",
+        "ecr:GetLifecyclePolicy",
+        "ecr:SetRepositoryPolicy",
+        "ecr:GetRepositoryPolicy"
+      ],
+      "Resource": "arn:aws:ecr:eu-west-1:283556840805:repository/uif-beacon-*"
+    },
+    {
+      "Sid": "LoadBalancer",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:Describe*",
+        "elasticloadbalancing:Modify*",
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags",
+        "elasticloadbalancing:DescribeTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "StepFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "states:CreateStateMachine",
+        "states:DescribeStateMachine",
+        "states:UpdateStateMachine",
+        "states:DeleteStateMachine",
+        "states:ListStateMachineVersions",
+        "states:TagResource",
+        "states:UntagResource",
+        "states:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:states:eu-west-1:283556840805:stateMachine:uif-beacon-*"
+    },
+    {
+      "Sid": "StepFunctionsValidate",
+      "Effect": "Allow",
+      "Action": "states:ValidateStateMachineDefinition",
+      "Resource": "arn:aws:states:eu-west-1:283556840805:stateMachine:*"
+    }
+  ]
+}

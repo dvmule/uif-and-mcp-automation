@@ -1,0 +1,3 @@
+# Test dependencies for the beacon-export reference implementation.
+# (paramiko left with the in-Lambda SFTP path, UIFPE-438.)
+pytest==9.0.3

@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.pearson.com/gold/marketing_copy/v1/master.json",
+  "registry": {
+    "group": "product",
+    "artifact": "product.marketing-copy.gold",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "title": "Marketing copy",
+  "description": "Gold entity: the marketing-copy content library (UIFPE-252). Materialized from the PDH staging table XXPSO_EGO_MARKET_COPY_DATA at version 'C' (current); 1 row per contentId. Serves the on-demand content retrieval behind the contentUrl field on gold_product.product's marketingCopy items — the content itself rides NO feed (api channel only; the claim-check pattern, see domains/product/docs/design-marketing-copy-content-service.md).",
+  "metadata": {
+    "owner": {
+      "service": "urn:pearson:service:product:catalog-svc",
+      "team": "Enterprise Data Connect",
+      "contact": "reyasahamed.habibrahman@pearson.com"
+    },
+    "domain": "product",
+    "entity": "marketing_copy",
+    "version": "v1",
+    "primaryKey": [
+      {
+        "goldColumn": "contentId",
+        "drivingColumn": "CONTENT_ID"
+      }
+    ],
+    "dataClassification": "internal",
+    "audience": "engineering",
+    "lifecycle": "active"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contentId"
+  ],
+  "properties": {
+    "contentId": {
+      "type": "string",
+      "description": "Content identifier — the natural key of the library, and the one path segment of the retrieval URL. Live-measured effectively unique at version 'C' (6,561,618 distinct across 6,561,622 rows, 2026-09-03).",
+      "x-channels": [
+        "api"
+      ]
+    },
+    "marketingCopyTypeCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Content type (60 distinct values at version 'C').",
+      "x-channels": [
+        "api"
+      ]
+    },
+    "owningMarketCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Market that owns this copy.",
+      "x-channels": [
+        "api"
+      ]
+    },
+    "audienceCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Intended audience of the copy.",
+      "x-channels": [
+        "api"
+      ]
+    },
+    "marketingCopyText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Short human-readable description of the copy.",
+      "x-channels": [
+        "api"
+      ]
+    },
+    "marketingCopyContentText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The full marketing copy text (max 348,438 chars observed; avg 1,665). Null means nothing is published yet — the retrieval API answers 404 for such rows. Deliberately api-only: content never rides event or message feeds.",
+      "x-channels": [
+        "api"
+      ]
+    }
+  }
+}

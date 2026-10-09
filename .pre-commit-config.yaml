@@ -1,0 +1,66 @@
+# UIF local quality gates — the same checks CLAUDE.md's "Tech stack & tooling"
+# section names as the requirement (ruff, eslint/prettier, tflint/checkov,
+# hadolint, plus the domain's own pytest/vitest suite) run locally, before a
+# commit leaves the dev machine, instead of only being discovered from
+# .github/workflows/domain-ci.yml after a push. This does not replace that
+# workflow's structural + contract gates — it's the local mirror of the same
+# tools, scoped to domains/** the way domain-ci.yml is path-filtered.
+#
+# Install:  pip install pre-commit && pre-commit install
+# Run now:  pre-commit run --all-files
+#
+# Revisions below are pinned at authoring time (2026-08-10) — run
+# `pre-commit autoupdate` and re-verify before relying on this long-term.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # Python — domains/**/*.py (Glue/Lambda ETL apps, the FastAPI reference impl)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^domains/.*\.py$
+      - id: ruff-format
+        files: ^domains/.*\.py$
+
+  # TypeScript/Node — domains/**/*.ts (the Express reference impl)
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.12.0
+    hooks:
+      - id: eslint
+        files: ^domains/.*\.tsx?$
+        types: [file]
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.3.3
+    hooks:
+      - id: prettier
+        files: ^domains/.*\.tsx?$
+
+  # Dockerfile — domains/<domain>/src/Dockerfile, the one-container build contract
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
+        files: ^domains/[^/]+/src/Dockerfile$
+
+  # Terraform — domains/<domain>/infrastructure/terraform/**
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.96.1
+    hooks:
+      - id: terraform_tflint
+        files: ^domains/.*/infrastructure/terraform/
+      - id: terraform_checkov
+        files: ^domains/.*/infrastructure/terraform/
+        args: [--args=--quiet]

@@ -1,0 +1,302 @@
+domain: program
+version: v1
+
+# ── Semantic layer ──────────────────────────────────────────────────────────
+# source_system + canonical_lineage describe the PDH→canonical contract,
+# independent of which lake tier physically delivers the data. Compiled from
+# the authored intake at ./program.mapping.json (same folder) — that file is the
+# source of truth for the RULES; this one is what the runtime consumes.
+
+source_system:
+  name: "Oracle EBS PDH"
+  modules: ["Inventory", "Item Catalog"]
+  contact: "ebs-platform@pearson.com"
+
+# What a "program" is (framework owner, 2026-08-11): SEGMENT1 prefix 'P2' at
+# ORGANIZATION_ID 82. The item catalog also holds LEGACY 'P1%' programs in the
+# same catalog groups (1001, 13001) which are deliberately NOT brought to Gold.
+# The prefix — not catalog-group membership — is therefore the canonical
+# discriminator, and it is applied on BOTH sides of relatedPrograms so a
+# self-reference can never point at a program this table does not carry.
+# Narrowing is intentional and revisitable: widening the prefix later is an
+# additive change, so it needs no consumer coordination.
+
+canonical_lineage:
+  inventoryItemId:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: INVENTORY_ITEM_ID
+    role:       pk
+
+  organizationId:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: ORGANIZATION_ID
+    role:       pk
+
+  programId:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: SEGMENT1
+
+  description:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: DESCRIPTION
+
+  longDescription:
+    pdh_table:  MTL_SYSTEM_ITEMS_TL
+    pdh_column: LONG_DESCRIPTION
+    pdh_filter: "LANGUAGE = 'US'"
+    pdh_grain:  org-level, joined on (INVENTORY_ITEM_ID, ORGANIZATION_ID)
+
+  relevanceValue:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: N_EXT_ATTR1
+    pdh_filter: "ATTR_GROUP_ID = 1422"
+    pdh_grain:  item-level
+    # dataType integer per the intake. Product's unitWeight is the cautionary
+    # precedent — declared integer, 55.5% of source values were fractional and
+    # a cast would have truncated real data. Confirmed integer for program by
+    # the mapping owner 2026-08-11; if a fractional value ever appears here the
+    # CAST below silently truncates it, so revisit rather than assume.
+
+  programFamilyCatalogCode:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR1
+    pdh_filter: "ATTR_GROUP_ID = 1422"
+    pdh_grain:  item-level
+
+  coverImageLargeUrl:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR1
+    pdh_filter: "ATTR_GROUP_ID = 1423"
+    pdh_grain:  item-level
+    # URL normalization: the programImageUrl rule in the intake's transforms
+    # registry. DAM paths (prefix '/P') get the DAM host + asset prefix;
+    # site-relative paths get the images host; everything else passes through
+    # (absolute URLs and the Oracle TBD/N-A sentinels — Gold does not correct
+    # source data).
+    # CONFIRMED by the mapping owner 2026-08-11: '/P' is the right DAM prefix
+    # for program images, and program images live in the SAME DAM asset space as
+    # product's, so the inherited host + GUID is correct.
+    # The '/coverimage%' and '/bigcovers%' site-relative branches are inherited
+    # from product and NOT yet observed in group 1423; the owner expects those
+    # shapes may occur here. An unmatched branch is inert, so they are kept —
+    # dropping them could lose real values, keeping them costs nothing. Confirm
+    # against the first load: product's equivalent rule had to be corrected from
+    # dev row counts ('/covers' matched 0 rows; the real shape was
+    # '/coverimage/<isbn>.jpg' on 1,567,297 rows).
+
+  programOwnerName:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR1
+    pdh_filter: "ATTR_GROUP_ID = 1463"
+    pdh_grain:  item-level
+
+  inventoryItemStatus:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: INVENTORY_ITEM_STATUS_CODE
+    # Carried as an ATTRIBUTE, which is why the entity filter does not exclude
+    # ERROR/DELETE programs: consumers are told the status rather than having
+    # the row disappear. The relatedPrograms join does exclude them — you
+    # should not be pointed at a deleted program.
+
+  # DERIVED, not mapped — the one column in this entity that no single
+  # (table, column, filter) triple describes. Three hops from the program, and
+  # the qualifying test differs by catalog group. Recorded here in full because
+  # the lineage entry is the only place a consumer can learn where the value
+  # came from, and "EGO_MTL_SY_ITEMS_EXT_B.C_EXT_ATTR9" alone would be a lie.
+  parentProductId:
+    pdh_table: "MTL_SYSTEM_ITEMS_B (via EGO_MTL_SY_ITEMS_EXT_B groups 1421 -> 1401/1164/741)"
+    pdh_column: "SEGMENT1 of the qualifying associated product"
+    pdh_filter: "ATTR_GROUP_ID = 1421 link; then catalog 10002 -> group 1401 C_EXT_ATTR9 names it; else group 1164 C_EXT_ATTR2 = own group 741 C_EXT_ATTR8"
+    pdh_grain: >-
+      item-level, DERIVED over three hops. program --1421 link (ppid string)-->
+      associated products --> the one that qualifies as parent. DIGITAL (catalog
+      10002): a sibling names this product as its parentPPID (1401 C_EXT_ATTR9).
+      NON-DIGITAL: the product's own ParentISBN13 (1164 C_EXT_ATTR2) equals its
+      own ISBN13 (741 C_EXT_ATTR8) — a self-referential top-of-tree marker.
+      Collapsed with min(SEGMENT1) so the value is DETERMINISTIC: an unordered
+      "first" would move the canonical hash between identical runs and ping every
+      consumer forever (acceptance check A8).
+  associatedProducts:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: "C_EXT_ATTR1 (link) -> MTL_SYSTEM_ITEMS_B.SEGMENT1 (value)"
+    pdh_filter: "ATTR_GROUP_ID = 1421"
+    pdh_grain:  >-
+      item-level, multi-row value list. TWO-HOP and REVERSE-KEYED: the link row
+      lives on the PRODUCT's item id and carries the PROGRAM's ppid as a string
+      in C_EXT_ATTR1, so the array is grouped by that string and joined to the
+      program on SEGMENT1 — not on the entity key.
+    # CDC LIMITATION (ADR-0003 D1): key_mapping is a single-table projection,
+    # so 'a changed group-1421 row affects program X' is inexpressible — it
+    # needs a join from the program's ppid string to its inventoryItemId.
+    # Mitigation: the recompute leg carries associatedProducts, riding the
+    # entity's own run once every N runs (ADR-0020 decision 5, declared as
+    # schedule.recompute). NOT --rebuild, which writes no change-log rows and
+    # would repair the table while telling no consumer. The durable fix is a
+    # program-keyed Silver view of group 1421; raise with the Silver team to
+    # retire this.
+    # DANGLING REFERENCES ARE POSSIBLE HERE, BY DESIGN: an associated product's
+    # ppid may not exist in gold_product.product, whose own filter is
+    # SEGMENT1 LIKE 'A%'. Filtering by another entity's business rule would
+    # couple the two, so the association is reported as it is and the entity
+    # contract states the caveat. Contrast relatedPrograms, a SELF-reference,
+    # which must always resolve.
+
+  relatedPrograms:
+    pdh_table:  MTL_RELATED_ITEMS
+    pdh_column: "RELATED_ITEM_ID -> MTL_SYSTEM_ITEMS_B.SEGMENT1 (programPpid); RELATIONSHIP_TYPE_ID -> FND_LOOKUP_VALUES_VL.MEANING (relationshipType)"
+    pdh_filter: >-
+      related side: SEGMENT1 LIKE 'P2%' AND ITEM_CATALOG_GROUP_ID IN (1001, 13001)
+      AND INVENTORY_ITEM_STATUS_CODE NOT IN ('ERROR', 'DELETE');
+      lookup: LOOKUP_TYPE = 'MTL_RELATIONSHIP_TYPES' AND ENABLED_FLAG = 'Y'
+    pdh_grain:  >-
+      org-level, multi-row struct list. Keyed on the PROGRAM's own
+      (INVENTORY_ITEM_ID, ORGANIZATION_ID) — the relationship row sits on the
+      program, so unlike associatedProducts its link changes ARE
+      change-detectable.
+    # The 'P2%' predicate on the RELATED side is the framework owner's
+    # 2026-08-11 decision applied consistently: the source query scoped
+    # program-ness by catalog group, which includes the legacy P1% programs
+    # Gold excludes, so without it this array would reference rows that do not
+    # exist in this table. Catalog group and status are kept as well, matching
+    # the supplied query.
+    # RESIDUAL STALENESS: a related program's ppid being RENAMED is a change on
+    # another item's row and is not detectable either. relatedPrograms is in the
+    # recompute leg's column list, which closes it at no extra scheduling cost
+    # because the leg rides a run that happens anyway (UIFPE-457).
+
+# ── Physical layer ──────────────────────────────────────────────────────────
+# Where PDH data currently lives in our lake. Consumed by the Glue transform
+# and reconcile jobs. Every alias here MUST also appear in the pipeline config
+# (src/apps/pipelines/base/program.yaml): an alias in the config but not here
+# gets no key_mapping and the transform refuses to run; an alias here but not
+# in the config is never registered as a temp view and the SQL fails at
+# TABLE_OR_VIEW_NOT_FOUND.
+
+schema:
+  master: ../../../gold/program/v1/master.json
+
+sql:
+  file: sql/program.sql
+
+sources:
+  - alias: items
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+    is_source_of_truth: true        # used by reconcile for orphan detection
+    sot_pk_mapping:                 # gold PK col -> Spark SQL expression
+      inventoryItemId: "INVENTORY_ITEM_ID"
+      organizationId:  "ORGANIZATION_ID"
+    # Domain filter — MUST match the WHERE at the end of sql/program.sql.
+    # Reconcile appends this to its SoT PK projection, and it is what DELETES a
+    # row that leaves the domain (a P2 item reclassified, or moved off org 82):
+    # the transform only upserts, so without this filter the anti-join would
+    # still find the item in the unfiltered SoT and the stale Gold row would
+    # never be removed. If the two diverge, reclassified rows leak or valid
+    # rows get reconcile-deleted.
+    sot_filter: "SEGMENT1 LIKE 'P2%' AND ORGANIZATION_ID = 82"
+    key_mapping:                    # ADR-0003 D1: changed row -> affected Gold key(s)
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+      organizationId:  "CAST(ORGANIZATION_ID AS BIGINT)"
+
+  - alias: items_ext
+    silver_table: uif_echo_{env}_silver_mdm.ego_mtl_sy_items_ext_b
+    watermark_col: _silver_updated_at
+    key_mapping:                    # item-level source: binds a PK SUBSET ->
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"  # fans out to all orgs (D1)
+
+  - alias: items_tl
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_tl
+    watermark_col: _silver_updated_at
+    key_mapping:                    # org-level translations table
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+      organizationId:  "CAST(ORGANIZATION_ID AS BIGINT)"
+
+  - alias: related
+    silver_table: uif_echo_{env}_silver_mdm.mtl_related_items
+    watermark_col: _silver_updated_at
+    # The relationship row sits on the PROGRAM, so the full PK is expressible
+    # and relatedPrograms link changes are properly detected.
+    key_mapping:
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+      organizationId:  "CAST(ORGANIZATION_ID AS BIGINT)"
+
+  - alias: rel_types
+    silver_table: uif_echo_{env}_silver_mdm.fnd_lookup_values_vl
+    watermark_col: _silver_updated_at
+    # DECODE table, not an item source: it has neither INVENTORY_ITEM_ID nor
+    # ORGANIZATION_ID, so there is no per-row mapping to a Gold key at all —
+    # and validate_key_mappings refuses any source without one. The only
+    # honest mapping is therefore a CONSTANT binding the whole org half of the
+    # PK: one changed lookup row fans out to EVERY program row. It is also
+    # correct — relationshipType sits on every relatedPrograms element, so a
+    # relationship-type rename really does invalidate all of them.
+    # Do NOT narrow this to dodge the cost (same instruction product's
+    # org_params carries, for the same reason). Cost control, in order:
+    #   1. the canonical hash gate (ADR-0003 D3) drops unchanged rebuilt rows
+    #      with no write, no change-log row and no _gold_updated_at bump;
+    #   2. glue.max_affected_fraction WARNs on a large rebuild — a print, not
+    #      a stop.
+    # Known amplifier, inherited from the org_params experience: if Silver
+    # stamps this table's whole snapshot per ingest, every re-ingest presents
+    # all rows as changed and triggers a full program rebuild. Program is a
+    # small slice, so this is affordable; revisit if it bites.
+    key_mapping:
+      organizationId: "CAST(82 AS BIGINT)"
+
+  - alias: items_all
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+    # SECOND alias over the driving table, registered FULL. Required because
+    # Phase 2 replaces the `items` temp view with only the affected entities,
+    # while both array CTEs must resolve OTHER items' SEGMENT1 — the associated
+    # product's, and the related program's. Reading `items` there would silently
+    # return only the rows already being rebuilt.
+    # Its key_mapping is honest but incomplete in the same way as
+    # associatedProducts: a changed item row maps to the Gold row with that same
+    # PK, not to the programs REFERENCING it. The recompute leg covers the
+    # difference.
+    key_mapping:
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+      organizationId:  "CAST(ORGANIZATION_ID AS BIGINT)"
+
+target:
+  database: uif_echo_{env}_gold_program
+  table: program
+  primary_key_cols:
+    - inventoryItemId
+    - organizationId
+
+# ADR-0003 D11: every ARRAY-typed master property declares its sort key here
+# (stable ordering => stable hashes).
+array_sort_keys:
+  associatedProducts: [value]                     # value list — sorted by itself
+  # programPpid alone would TIE when one program relates to the same program
+  # under two relationship types, leaving array order nondeterministic and
+  # churning channel hashes every run. relationshipType is the tie-breaker
+  # (framework owner, 2026-08-11).
+  relatedPrograms: [relatedProgramId, relationshipType]
+
+# ADR-0003 D12: Spark types for complex (array/object/date) columns — used by
+# the auto-DDL when the maintenance diff adds them.
+column_types:
+  associatedProducts: ARRAY<STRING>
+  relatedPrograms: >-
+    ARRAY<STRUCT<relatedProgramId: STRING, relationshipType: STRING>>
+
+# Physical column order. MUST match master.json property order and the mapping
+# SQL SELECT order (pinned by qe/test_gold_mapping_intake_parity.py); the
+# framework metadata columns are appended by the runtime after these.
+output_columns:
+  - inventoryItemId
+  - organizationId
+  - programId
+  - description
+  - longDescription
+  - relevanceValue
+  - programFamilyCatalogCode
+  - coverImageLargeUrl
+  - programOwnerName
+  - inventoryItemStatus
+  - parentProductId
+  - associatedProducts
+  - relatedPrograms

@@ -1,0 +1,62 @@
+# macOS
+.DS_Store
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.plan
+*.tfplan
+.terraform.lock.hcl
+terraform.tfvars
+
+# Bootstrap state is an exception — it owns 3 infra resources with no secrets
+!infra/bootstrap/terraform.tfstate
+
+# Env-specific tfvars under envs/ are tracked and source-controlled
+!envs/*.tfvars
+
+# Terraform local JAR cache (populated by glue_jars.tf null_resource —
+# JARs are downloaded from Maven Central on apply and uploaded to S3).
+infra/.cache/
+**/.cache/jars/
+
+# Build artifacts
+.build/
+*.zip
+
+# Lambda layers (large native libs, e.g. Oracle Instant Client)
+**/lambda/layers/
+**/lambda/gcs_layer/
+**/lambda/silver_bq_layer/
+**/lambda/controller_bq_layer/
+
+# Documents / binaries not part of source
+*.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Pipeline migration snapshots (pre-migration config backups produced by
+# scripts/migrate_pipeline_profiles.py — env-specific runtime artifacts)
+ingestion-framework/migrations/
+
+# Local operational artifacts (not source)
+# NOTE: docs/ is intentionally tracked — it holds ADRs and incident write-ups
+# referenced from CLAUDE.md. Only tasks/ (session working notes) stays local.
+tasks/
+
+# Local dev tooling (Node binaries downloaded for UI builds)
+.tools/
+
+# Claude
+.claude/
+.superpowers/
+.playwright-mcp/

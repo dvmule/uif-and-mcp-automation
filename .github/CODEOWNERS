@@ -1,0 +1,55 @@
+# CODEOWNERS — Four-in-a-Box ownership overlay for UIF.
+#
+# Domains are vertical, ownable units; capabilities are horizontal standards.
+# The FDE owns a domain's engineering roots (src/ + infrastructure/); the UX
+# Lead owns ui/ + ux/; the QE Lead owns qe/ and the CI green-gate; the PM owns
+# scope (README.md/CLAUDE.md) and the Jira trace. Replace the placeholder teams
+# with real handles.
+#
+# Later, more specific rules win.
+
+# --- Central platform (standards, not code) --------------------------------
+/architecture-design/     @uif-platform
+/standards/               @uif-platform
+/capabilities/            @uif-platform
+/delivery-lab/            @uif-platform
+/delivery-lab/reference-implementations/ @uif-platform
+/_domain-template/        @uif-platform
+/create-domain.sh         @uif-platform
+/.github/                 @uif-platform
+/jira/                    @uif-pm
+
+# --- Domains: FDE owns the whole domain by default -------------------------
+/domains/                 @uif-fde
+
+# --- Cross-domain role overrides (UX + QE own their facets everywhere) -----
+/domains/*/ui/            @uif-ux
+/domains/*/ux/            @uif-ux
+/domains/*/qe/            @uif-qe
+
+# --- Stacks: same Four-in-a-Box overlay as domains, deliberately mirrored --
+# A stack (echo/beacon/harbor-shaped — see stacks/harbor/CLAUDE.md) is not a
+# domain, but ownership follows the identical pattern: FDE owns the whole
+# stack by default, UX/QE own their facets. Without this, a stack silently
+# has NO CODEOWNERS coverage at all (confirmed gap — stacks/harbor/ had none
+# until this rule existed), since none of the /domains/ patterns above match
+# a /stacks/ path.
+/stacks/                  @uif-fde
+/stacks/*/ui/             @uif-ux
+/stacks/*/ux/             @uif-ux
+/stacks/*/qe/             @uif-qe
+
+# --- Echo: named accountable owner (ADR-0015, decided 2026-09-09) ----------
+# Every @uif-* handle above is a PLACEHOLDER and none of them resolve — all
+# five return 404 against this org. GitHub silently ignores an unresolvable
+# owner, so the overlay above currently grants nothing and no path in this
+# repository has working CODEOWNERS coverage. The entry below is the first one
+# that does.
+#
+# Placed LAST on purpose. GitHub applies the last matching pattern, not the
+# most specific one (the header's "more specific rules win" holds only because
+# the two orders happen to coincide above). So this line deliberately takes
+# stacks/echo/ui/, /ux/ and /qe/ back from the inert role globs rather than
+# leaving those three facets owned by nobody. Split them out again once the UX
+# and QE handles exist — the overlay is right, its handles just aren't real yet.
+/stacks/echo/             @vaibhav-yenorkar_pearson

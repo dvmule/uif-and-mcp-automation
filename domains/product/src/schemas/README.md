@@ -1,0 +1,7 @@
+# product / src/schemas
+
+Registered contracts for this domain (`../../../../stacks/apicurio/standards/`).
+
+- `mapping/product/v1/product.mapping.json` — Silver→Gold attribute mapping for `gold_product.product`, validated against the central `../../../../stacks/apicurio/standards/gold-attribute-mapping.schema.json` (see the worked standard `../../../../stacks/apicurio/standards/gold-attribute-mapping.md`). **This file is also the single source of truth for the event pipeline's channel gating**: each column's `channels.event/message/api` flags decide which attributes leave on which delivery channel (`../events/`); `../events/scripts/test-upload.ps1` uploads this exact file to the pipeline's `config/product.mapping.json`. Note: `channels.<name>` must stay `true` on **every** channel for `organizationCode` — the client-subscription rules filter on it, and the Event Fabric Processor fails a run closed if the invariant is broken (see `../events/README.md`).
+- `data/product-master.data-contract.json` — the `product.master` data product contract (owner, SLA, quality rules, classification, lineage), per `../../../../capabilities/data/guidelines.md`. Wraps the schema in `events/product-created-data.json`.
+- `events/product-{created,updated}-{data,example}.json` — the `com.pearson.product.product.created.v1` / `….updated.v1` event contracts: data schemas (exact event-tier projections of master, identical to each other by gate — `../../qe/test_event_schemas.py`) and worked envelope examples.

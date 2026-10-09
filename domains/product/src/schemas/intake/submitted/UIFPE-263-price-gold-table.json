@@ -1,0 +1,238 @@
+{
+  "task": "Transformation_Task_20260906095637",
+  "intent": "add",
+  "jobProperties": {
+    "frequency": "gold-24h",
+    "start_time": "08:45"
+  },
+  "sourceGraph": [
+    {
+      "table": "uif_echo_dev_silver_tep.xxpso_qp_vat_price_stg",
+      "eav": false,
+      "joinType": "left",
+      "joins": []
+    },
+    {
+      "table": "uif_echo_dev_silver_tep.qp_list_headers_tl",
+      "eav": false,
+      "joinType": "left",
+      "joins": []
+    },
+    {
+      "table": "uif_echo_dev_silver_tep.qp_list_headers_b",
+      "eav": false,
+      "joinType": "left",
+      "joins": []
+    }
+  ],
+  "intake": {
+    "$schema": "stacks/apicurio/standards/gold-attribute-mapping.schema.json",
+    "domain": "price",
+    "table": "gold_price.price",
+    "drivingTable": "XXPSO_QP_VAT_PRICE_STG",
+    "drivingSilverTable": "uif_echo_{env}_silver_tep.xxpso_qp_vat_price_stg",
+    "silverTables": {
+      "QP_LIST_HEADERS_TL": "uif_echo_{env}_silver_tep.qp_list_headers_tl",
+      "QP_LIST_HEADERS_B": "uif_echo_{env}_silver_tep.qp_list_headers_b"
+    },
+    "drivingFilter": "PPID IS NOT NULL AND (LIST_LINE_TYPE_CODE = 'PLL' OR (LIST_LINE_TYPE_CODE = 'PLL_PBH' AND FROM_QUANTITY <= 1))",
+    "entityKey": [
+      {
+        "goldColumn": "ppid",
+        "drivingColumn": "PPID"
+      }
+    ],
+    "transforms": {
+      "isbn13Pick": {
+        "description": "Only true ISBN-13s reach gold (length 13, starting with 9); MAX picks deterministically across the group.",
+        "sqlExpr": "MAX(CASE WHEN length({x}) = 13 AND {x} LIKE '9%' THEN {x} END)"
+      }
+    },
+    "batch": {
+      "requestedBy": "reyasahamed.habibrahman@pearson.com",
+      "targetDate": "2026-09-05",
+      "backfillMode": "silent",
+      "newChannel": null
+    },
+    "columns": [
+      {
+        "goldColumnName": "ppid",
+        "businessDescription": "Pearson product identifier (PPID) — joins price rows to gold_product.product",
+        "kind": "scalar",
+        "dataType": "string",
+        "source": {
+          "table": "XXPSO_QP_VAT_PRICE_STG",
+          "column": "PPID",
+          "filter": null
+        },
+        "transform": null,
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "nullable": false,
+        "notes": null
+      },
+      {
+        "goldColumnName": "isbn13",
+        "businessDescription": "ISBN-13 of the priced product — only true 13-digit ISBNs starting with 9; other source codes map to null",
+        "kind": "scalar",
+        "dataType": "string",
+        "source": {
+          "table": "XXPSO_QP_VAT_PRICE_STG",
+          "column": "ISBN",
+          "filter": null
+        },
+        "transform": {
+          "rule": "isbn13Pick"
+        },
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "nullable": true,
+        "notes": null
+      },
+      {
+        "goldColumnName": "priceSpecifications",
+        "businessDescription": "Current price per (currency, VAT country): the price EFFECTIVE NOW when one exists (started, and not yet ended), else the latest end-dated — list identity and currency from the standard Oracle price list headers, net/VAT amounts from the custom VAT staging (listPrice interim from the custom copy until QP_LIST_LINES registers in silver)",
+        "kind": "nested",
+        "joinKey": "PPID -> price rows attach by product PPID",
+        "channels": {
+          "event": true,
+          "message": true,
+          "api": true
+        },
+        "pick": {
+          "partitionBy": [
+            "currency",
+            "vatCountry"
+          ],
+          "orderBy": [
+            {
+              "expr": "CASE WHEN START_DATE <= current_timestamp AND (END_DATE IS NULL OR END_DATE >= current_date) THEN 0 ELSE 1 END",
+              "direction": "asc"
+            },
+            {
+              "expr": "END_DATE",
+              "direction": "desc"
+            },
+            {
+              "expr": "START_DATE",
+              "direction": "desc"
+            },
+            {
+              "expr": "LIST_LINE_ID",
+              "direction": "desc"
+            }
+          ]
+        },
+        "fields": [
+          {
+            "name": "priceListName",
+            "type": "string",
+            "sortKey": true,
+            "source": {
+              "table": "QP_LIST_HEADERS_TL",
+              "column": "NAME",
+              "filter": "LANGUAGE = 'US'",
+              "join": {
+                "type": "left",
+                "on": [
+                  {
+                    "leftColumn": "LIST_HEADER_ID",
+                    "rightColumn": "LIST_HEADER_ID"
+                  }
+                ]
+              }
+            },
+            "transform": null
+          },
+          {
+            "name": "currency",
+            "type": "string",
+            "sortKey": true,
+            "source": {
+              "table": "QP_LIST_HEADERS_B",
+              "column": "CURRENCY_CODE",
+              "join": {
+                "type": "left",
+                "on": [
+                  {
+                    "leftColumn": "LIST_HEADER_ID",
+                    "rightColumn": "LIST_HEADER_ID"
+                  }
+                ]
+              }
+            },
+            "transform": null
+          },
+          {
+            "name": "vatCountry",
+            "type": "string",
+            "sortKey": true,
+            "source": {
+              "table": "XXPSO_QP_VAT_PRICE_STG",
+              "column": "VAT_COUNTRY"
+            },
+            "transform": null
+          },
+          {
+            "name": "listPrice",
+            "type": "number",
+            "sortKey": false,
+            "source": {
+              "table": "XXPSO_QP_VAT_PRICE_STG",
+              "column": "LIST_PRICE"
+            },
+            "transform": null
+          },
+          {
+            "name": "netPrice",
+            "type": "number",
+            "sortKey": false,
+            "source": {
+              "table": "XXPSO_QP_VAT_PRICE_STG",
+              "column": "NET_PRICE"
+            },
+            "transform": null
+          },
+          {
+            "name": "vatPrice",
+            "type": "number",
+            "sortKey": false,
+            "source": {
+              "table": "XXPSO_QP_VAT_PRICE_STG",
+              "column": "VAT_PRICE"
+            },
+            "transform": null
+          },
+          {
+            "name": "startDate",
+            "type": "timestamp",
+            "sortKey": false,
+            "source": {
+              "table": "XXPSO_QP_VAT_PRICE_STG",
+              "column": "START_DATE"
+            },
+            "transform": null
+          },
+          {
+            "name": "endDate",
+            "type": "timestamp",
+            "sortKey": false,
+            "source": {
+              "table": "XXPSO_QP_VAT_PRICE_STG",
+              "column": "END_DATE"
+            },
+            "transform": null
+          }
+        ],
+        "notes": null,
+        "filter": null
+      }
+    ]
+  }
+}

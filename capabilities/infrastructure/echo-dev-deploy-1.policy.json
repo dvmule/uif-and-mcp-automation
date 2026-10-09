@@ -1,0 +1,174 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Sqs",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:TagQueue",
+        "sqs:UntagQueue",
+        "sqs:ListQueueTags",
+        "sqs:AddPermission",
+        "sqs:RemovePermission"
+      ],
+      "Resource": [
+        "arn:aws:sqs:eu-west-1:283556840805:echo-dev-*",
+        "arn:aws:sqs:eu-west-1:283556840805:uif-*-dev*"
+      ]
+    },
+    {
+      "Sid": "Sns",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:sns:eu-west-1:283556840805:echo-dev-*"
+    },
+    {
+      "Sid": "EventBusesAndRules",
+      "Effect": "Allow",
+      "Action": [
+        "events:CreateEventBus",
+        "events:DescribeEventBus",
+        "events:DeleteEventBus",
+        "events:PutRule",
+        "events:DescribeRule",
+        "events:DeleteRule",
+        "events:EnableRule",
+        "events:DisableRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:ListTargetsByRule",
+        "events:TagResource",
+        "events:UntagResource",
+        "events:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:events:eu-west-1:283556840805:event-bus/echo-dev-*",
+        "arn:aws:events:eu-west-1:283556840805:event-bus/uif-*-dev*",
+        "arn:aws:events:eu-west-1:283556840805:rule/echo-dev-*",
+        "arn:aws:events:eu-west-1:283556840805:rule/uif-*-dev*"
+      ]
+    },
+    {
+      "Sid": "EventConnectionsAndApiDestinations",
+      "Effect": "Allow",
+      "Action": [
+        "events:CreateConnection",
+        "events:DescribeConnection",
+        "events:UpdateConnection",
+        "events:DeleteConnection",
+        "events:CreateApiDestination",
+        "events:DescribeApiDestination",
+        "events:UpdateApiDestination",
+        "events:DeleteApiDestination"
+      ],
+      "Resource": [
+        "arn:aws:events:eu-west-1:283556840805:connection/echo-dev-*",
+        "arn:aws:events:eu-west-1:283556840805:connection/uif-*-dev*",
+        "arn:aws:events:eu-west-1:283556840805:api-destination/echo-dev-*",
+        "arn:aws:events:eu-west-1:283556840805:api-destination/uif-*-dev*"
+      ]
+    },
+    {
+      "Sid": "Pipes",
+      "Effect": "Allow",
+      "Action": [
+        "pipes:CreatePipe",
+        "pipes:DescribePipe",
+        "pipes:UpdatePipe",
+        "pipes:DeletePipe",
+        "pipes:StartPipe",
+        "pipes:StopPipe",
+        "pipes:TagResource",
+        "pipes:UntagResource",
+        "pipes:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:pipes:eu-west-1:283556840805:pipe/echo-dev-*"
+    },
+    {
+      "Sid": "KinesisStreams",
+      "Effect": "Allow",
+      "Action": [
+        "kinesis:CreateStream",
+        "kinesis:DeleteStream",
+        "kinesis:DescribeStream",
+        "kinesis:DescribeStreamSummary",
+        "kinesis:AddTagsToStream",
+        "kinesis:RemoveTagsFromStream",
+        "kinesis:ListTagsForStream",
+        "kinesis:IncreaseStreamRetentionPeriod",
+        "kinesis:DecreaseStreamRetentionPeriod",
+        "kinesis:UpdateShardCount",
+        "kinesis:UpdateStreamMode",
+        "kinesis:StartStreamEncryption",
+        "kinesis:StopStreamEncryption",
+        "kinesis:EnableEnhancedMonitoring",
+        "kinesis:DisableEnhancedMonitoring",
+        "kinesis:RegisterStreamConsumer",
+        "kinesis:DeregisterStreamConsumer",
+        "kinesis:DescribeStreamConsumer"
+      ],
+      "Resource": [
+        "arn:aws:kinesis:eu-west-1:283556840805:stream/echo-dev-*",
+        "arn:aws:kinesis:eu-west-1:283556840805:stream/uif-*-dev*",
+        "arn:aws:kinesis:eu-west-1:283556840805:stream/echo-dev-*/consumer/*",
+        "arn:aws:kinesis:eu-west-1:283556840805:stream/uif-*-dev*/consumer/*"
+      ]
+    },
+    {
+      "Sid": "LambdaEventSourceMappingCreate",
+      "Effect": "Allow",
+      "Action": "lambda:CreateEventSourceMapping",
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "lambda:FunctionArn": "arn:aws:lambda:eu-west-1:283556840805:function:*dev*"
+        }
+      }
+    },
+    {
+      "Sid": "LambdaEventSourceMappings",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:UpdateEventSourceMapping",
+        "lambda:DeleteEventSourceMapping"
+      ],
+      "Resource": "arn:aws:lambda:eu-west-1:283556840805:event-source-mapping:*",
+      "Condition": {
+        "StringLike": {
+          "lambda:FunctionArn": "arn:aws:lambda:eu-west-1:283556840805:function:*dev*"
+        }
+      }
+    },
+    {
+      "Sid": "LambdaEventSourceMappingRead",
+      "Effect": "Allow",
+      "Action": "lambda:GetEventSourceMapping",
+      "Resource": "*"
+    },
+    {
+      "Sid": "LambdaEventSourceMappingTags",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:ListTags",
+        "lambda:TagResource",
+        "lambda:UntagResource"
+      ],
+      "Resource": "arn:aws:lambda:eu-west-1:283556840805:event-source-mapping:*"
+    }
+  ]
+}

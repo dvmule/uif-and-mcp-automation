@@ -1,0 +1,192 @@
+[
+  {
+    "customer_id": {
+      "S": "pmc"
+    },
+    "domain_detail_type": {
+      "S": "product#product.created.v1"
+    },
+    "subscription_id": {
+      "S": "8f3c1e2a-4b7d-4c19-9a55-2e6f0d1b7c34"
+    },
+    "policy_sid": {
+      "S": "uif8f3c1e2a4b7d4c199a552e6f0d1b7c34"
+    },
+    "domain": {
+      "S": "product"
+    },
+    "operation": {
+      "S": "created"
+    },
+    "version": {
+      "S": "v1"
+    },
+    "detail_type": {
+      "S": "product.created.v1"
+    },
+    "rule_name": {
+      "S": "uif-event-dev-on-product-product-created-v1-pmc"
+    },
+    "rule_arn": {
+      "S": "arn:aws:events:eu-west-1:444455556666:rule/uif-event-dev-product-bus/uif-event-dev-on-product-product-created-v1-pmc"
+    },
+    "target": {
+      "M": {
+        "target_type": {
+          "S": "SQS"
+        },
+        "target_arn": {
+          "S": "arn:aws:sqs:eu-west-1:444455556666:uif-event-dev-pmc-product-product-created-v1"
+        },
+        "target_config": {
+          "M": {
+            "consumer_principal_arn": {
+              "S": "arn:aws:iam::111122223333:role/pmc-event-consumer"
+            },
+            "dlq_arn": {
+              "S": "arn:aws:sqs:eu-west-1:444455556666:uif-event-dev-pmc-product-product-created-v1-dlq"
+            },
+            "retry_policy": {
+              "M": {
+                "max_attempts": {
+                  "N": "3"
+                },
+                "max_age_seconds": {
+                  "N": "900"
+                }
+              }
+            },
+            "message_group_id": {
+              "NULL": true
+            }
+          }
+        }
+      }
+    },
+    "target_arn": {
+      "S": "arn:aws:sqs:eu-west-1:444455556666:uif-event-dev-pmc-product-product-created-v1"
+    },
+    "status": {
+      "S": "ACTIVE"
+    },
+    "status_reason": {
+      "NULL": true
+    },
+    "record_version": {
+      "N": "2"
+    },
+    "created_at": {
+      "S": "2026-09-03T09:14:02Z"
+    },
+    "created_by": {
+      "S": "ops@pmc.com"
+    },
+    "updated_at": {
+      "S": "2026-09-06T11:20:45Z"
+    },
+    "updated_by": {
+      "S": "ops@pmc.com"
+    },
+    "deleted_at": {
+      "NULL": true
+    },
+    "deleted_by": {
+      "NULL": true
+    }
+  },
+  {
+    "customer_id": {
+      "S": "platinum"
+    },
+    "domain_detail_type": {
+      "S": "product#product.created.v1"
+    },
+    "subscription_id": {
+      "S": "8f3c1e2a-4b7d-4c19-9a55-2e6f0d1b7c34"
+    },
+    "policy_sid": {
+      "S": "uif8f3c1e2a4b7d4c199a552e6f0d1b7c34"
+    },
+    "domain": {
+      "S": "product"
+    },
+    "operation": {
+      "S": "created"
+    },
+    "version": {
+      "S": "v1"
+    },
+    "detail_type": {
+      "S": "product.created.v1"
+    },
+    "rule_name": {
+      "S": "uif-event-dev-on-product-product-created-v1-platinum"
+    },
+    "rule_arn": {
+      "S": "arn:aws:events:eu-west-1:444455556666:rule/uif-event-dev-product-bus/uif-event-dev-on-product-product-created-v1-platinum"
+    },
+    "target": {
+      "M": {
+        "target_type": {
+          "S": "SQS"
+        },
+        "target_arn": {
+          "S": "arn:aws:sqs:eu-west-1:444455556666:uif-event-dev-platinum-product-product-created-v1"
+        },
+        "target_config": {
+          "M": {
+            "consumer_principal_arn": {
+              "S": "arn:aws:iam::111122223333:role/platinum-event-consumer"
+            },
+            "dlq_arn": {
+              "S": "arn:aws:sqs:eu-west-1:444455556666:uif-event-dev-platinum-product-product-created-v1-dlq"
+            },
+            "retry_policy": {
+              "M": {
+                "max_attempts": {
+                  "N": "3"
+                },
+                "max_age_seconds": {
+                  "N": "900"
+                }
+              }
+            },
+            "message_group_id": {
+              "NULL": true
+            }
+          }
+        }
+      }
+    },
+    "target_arn": {
+      "S": "arn:aws:sqs:eu-west-1:444455556666:uif-event-dev-platinum-product-product-created-v1"
+    },
+    "status": {
+      "S": "ACTIVE"
+    },
+    "status_reason": {
+      "NULL": true
+    },
+    "record_version": {
+      "N": "2"
+    },
+    "created_at": {
+      "S": "2026-09-03T09:14:02Z"
+    },
+    "created_by": {
+      "S": "ops@platinum.com"
+    },
+    "updated_at": {
+      "S": "2026-09-06T11:20:45Z"
+    },
+    "updated_by": {
+      "S": "ops@platinum.com"
+    },
+    "deleted_at": {
+      "NULL": true
+    },
+    "deleted_by": {
+      "NULL": true
+    }
+  }
+]

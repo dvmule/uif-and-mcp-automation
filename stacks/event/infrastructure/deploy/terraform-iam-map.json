@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "Terraform resource type -> the IAM actions a deploy role needs to manage it,",
+    "and how tightly they can be scoped. required-actions.py renders the event",
+    "stack's deploy policy from this for one environment; bootstrap-environment.sh",
+    "attaches it. Adding a resource type to the event root OR to modules/event-domain",
+    "means adding it here in the same change -- an unmapped type stops the derivation.",
+    "",
+    "Entries are taken from stacks/echo/infrastructure/deploy/terraform-iam-map.json",
+    "where echo manages the same type, because echo's list was corrected over nine",
+    "uat dispatches of apply-and-fix and its 'why' notes record each correction.",
+    "Scopes are the event stack's own: every ARN is pinned to {prefix} =",
+    "uif-event-{env}, so this grants nothing on any uif-echo-* resource.",
+    "",
+    "modules/event-domain is covered too, deliberately: product's uat Terraform",
+    "instantiates it (uif-event-{env}-product bus, DLQ, DLQ->recorder mapping,",
+    "mapping upload) with the same uat role, and those resources live under this",
+    "prefix, not echo's.",
+    "",
+    "EXPECT CORRECTIONS. apicurio needed five apply-and-fix rounds and echo nine;",
+    "the derivation sees the resources a stack declares and is blind to post-create",
+    "reads the provider makes around them."
+  ],
+  "_scopes": {
+    "iam_stack_roles": {"arns": ["arn:aws:iam::{account}:role/{prefix}-*"]},
+    "lambda": {"arns": ["arn:aws:lambda:{region}:{account}:function:{prefix}-*"]},
+    "lambda_esm": {"arns": ["*"], "why": "CreateEventSourceMapping, and Get/Update/Delete on a mapping, authorise on event-source-mapping:<uuid>, which is runtime-assigned and cannot carry the stack prefix."},
+    "sqs": {"arns": ["arn:aws:sqs:{region}:{account}:{prefix}-*"]},
+    "events": {"arns": [
+      "arn:aws:events:{region}:{account}:event-bus/{prefix}-*",
+      "arn:aws:events:{region}:{account}:rule/{prefix}-*",
+      "arn:aws:events:{region}:{account}:rule/{prefix}-*/*"
+    ], "why": "A rule on a custom bus is rule/<bus>/<name>; the GoldMergeCompleted rule sits on {prefix}-bus, and the event-domain bus is {prefix}-<domain>."},
+    "dynamodb": {"arns": [
+      "arn:aws:dynamodb:{region}:{account}:table/{prefix}-*",
+      "arn:aws:dynamodb:{region}:{account}:table/{prefix}-*/index/*",
+      "arn:aws:dynamodb:{region}:{account}:table/{prefix}-*/stream/*"
+    ]},
+    "glue": {"arns": ["arn:aws:glue:{region}:{account}:job/{prefix}-*"]},
+    "glue_unscopable": {"arns": ["*"], "why": "glue:GetJobs and glue:GetTags take no job-scoped resource in the provider's calls (echo's map)."},
+    "s3_stack_buckets": {"arns": ["arn:aws:s3:::{prefix}-*", "arn:aws:s3:::{prefix}-*/*"], "why": "uif-event-{env}-release-artifacts and the state bucket uif-event-{env}-data. Both ARN forms: bucket-level and object-level actions."},
+    "s3_unscopable": {"arns": ["*"]},
+    "cloudwatch_alarms": {"arns": ["arn:aws:cloudwatch:{region}:{account}:alarm:{prefix}-*"]},
+    "gold_artifacts_event_objects": {"arns": [
+      "arn:aws:s3:::uif-echo-{env}-gold-artifacts",
+      "arn:aws:s3:::uif-echo-{env}-gold-artifacts/event-pipeline/*"
+    ], "why": "The event-domain module uploads each domain's mapping/seed under event-pipeline/domains/{domain}/ in echo's gold-artifacts bucket. Scoped to that prefix only: nothing here may write echo's gold files."},
+    "sts_self": {"arns": ["*"]}
+  },
+  "resources": {
+    "aws_iam_role": {"scope": "iam_stack_roles", "actions": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:UpdateRole", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:ListRoleTags", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies", "iam:ListInstanceProfilesForRole", "iam:PassRole"], "why": "7 roles. The List* calls are post-create reads the provider makes on every refresh (echo)."},
+    "aws_iam_role_policy": {"scope": "iam_stack_roles", "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy"], "why": "Inline policies authorise against the ROLE's ARN."},
+    "aws_sqs_queue": {"scope": "sqs", "actions": ["sqs:CreateQueue", "sqs:DeleteQueue", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:GetQueueUrl", "sqs:TagQueue", "sqs:UntagQueue", "sqs:ListQueueTags"], "why": "trigger-dlq here; {prefix}-<domain>-dlq in event-domain. ListQueueTags is a separate 403 (echo)."},
+    "aws_sqs_queue_policy": {"scope": "sqs", "actions": ["sqs:GetQueueAttributes", "sqs:SetQueueAttributes"], "why": "The policy IS a queue attribute."},
+    "aws_lambda_function": {"scope": "lambda", "actions": ["lambda:CreateFunction", "lambda:DeleteFunction", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:GetFunctionCodeSigningConfig", "lambda:ListVersionsByFunction", "lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency", "lambda:GetFunctionConcurrency", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:TagResource", "lambda:UntagResource", "lambda:ListTags", "lambda:GetPolicy"], "extra_scope": "s3_stack_buckets", "extra_actions": ["s3:GetObject"], "why": "4 functions. Code comes from the release-artifacts bucket (s3_key), and CreateFunction/UpdateFunctionCode read the zip with the CALLER's credentials -- hence s3:GetObject on it."},
+    "aws_lambda_permission": {"scope": "lambda", "actions": ["lambda:AddPermission", "lambda:RemovePermission", "lambda:GetPolicy"], "why": "EventBridge -> pipeline controller."},
+    "aws_lambda_event_source_mapping": {"scope": "lambda_esm", "actions": ["lambda:CreateEventSourceMapping", "lambda:DeleteEventSourceMapping", "lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping", "lambda:ListEventSourceMappings", "lambda:TagResource", "lambda:ListTags"], "why": "subscription-configs stream -> provisioner here; <domain>-dlq -> dlq recorder in event-domain."},
+    "aws_cloudwatch_event_rule": {"scope": "events", "actions": ["events:PutRule", "events:DeleteRule", "events:DescribeRule", "events:EnableRule", "events:DisableRule", "events:TagResource", "events:UntagResource", "events:ListTagsForResource"]},
+    "aws_cloudwatch_event_target": {"scope": "events", "actions": ["events:PutTargets", "events:RemoveTargets", "events:ListTargetsByRule"], "why": "The GoldMergeCompleted target is a Lambda (resource policy), so no PassRole."},
+    "aws_cloudwatch_event_bus": {"scope": "events", "actions": ["events:CreateEventBus", "events:DeleteEventBus", "events:DescribeEventBus", "events:UpdateEventBus", "events:TagResource", "events:UntagResource", "events:ListTagsForResource"], "why": "event-domain's {prefix}-<domain> bus. The stack root declares no bus."},
+    "aws_dynamodb_table": {"scope": "dynamodb", "actions": ["dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable", "dynamodb:UpdateTable", "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:ListTagsOfResource", "dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups", "dynamodb:DescribeTimeToLive", "dynamodb:UpdateTimeToLive"], "why": "6 tables; subscription-configs has a stream. The Describe*/Update* pairs are separate 403s (echo)."},
+    "aws_glue_job": {"scope": "glue", "extra_scope": "glue_unscopable", "actions": ["glue:CreateJob", "glue:DeleteJob", "glue:GetJob", "glue:UpdateJob", "glue:TagResource", "glue:UntagResource"], "extra_actions": ["glue:GetJobs", "glue:GetTags"], "why": "publish + fabric-recovery. PassRole for the job role is in iam_stack_roles."},
+    "aws_s3_bucket": {"scope": "s3_stack_buckets", "extra_scope": "s3_unscopable", "actions": ["s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucketLocation", "s3:GetBucketAcl", "s3:GetBucketTagging", "s3:PutBucketTagging", "s3:GetBucketCORS", "s3:GetBucketLogging", "s3:GetBucketObjectLockConfiguration", "s3:GetBucketRequestPayment", "s3:GetAccelerateConfiguration", "s3:GetBucketWebsite", "s3:GetReplicationConfiguration", "s3:GetLifecycleConfiguration", "s3:GetBucketPolicy", "s3:ListBucket", "s3:ListBucketVersions"], "extra_actions": ["s3:ListAllMyBuckets"], "why": "The release bucket. The long read list is the computed attributes aws_s3_bucket populates on every refresh (echo)."},
+    "aws_s3_bucket_public_access_block": {"scope": "s3_stack_buckets", "actions": ["s3:GetBucketPublicAccessBlock", "s3:PutBucketPublicAccessBlock"]},
+    "aws_s3_bucket_server_side_encryption_configuration": {"scope": "s3_stack_buckets", "actions": ["s3:GetEncryptionConfiguration", "s3:PutEncryptionConfiguration"]},
+    "aws_s3_bucket_versioning": {"scope": "s3_stack_buckets", "actions": ["s3:GetBucketVersioning", "s3:PutBucketVersioning"]},
+    "aws_s3_object": {"scope": "gold_artifacts_event_objects", "actions": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:GetObjectTagging", "s3:PutObjectTagging", "s3:ListBucket"], "why": "event-domain's mapping + seed uploads only."},
+    "aws_cloudwatch_metric_alarm": {"scope": "cloudwatch_alarms", "actions": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource"], "why": "event-domain's optional DLQ-depth alarm (enable_dlq_alarm)."},
+    "terraform_data": {"scope": "_local", "actions": [], "why": "artifact_guard.tf. Calls nothing."}
+  },
+  "data": {
+    "aws_caller_identity": {"scope": "sts_self", "actions": ["sts:GetCallerIdentity"]},
+    "aws_lambda_function": {"scope": "lambda", "actions": ["lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:ListVersionsByFunction", "lambda:GetFunctionCodeSigningConfig", "lambda:GetPolicy", "lambda:ListTags"], "why": "event-domain looks up {prefix}-dlq-recorder by name."},
+    "aws_region": {"scope": "_local", "actions": [], "why": "Resolved from provider configuration; no API call."}
+  }
+}

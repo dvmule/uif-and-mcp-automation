@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TerraformStateThisEnvOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::pearson-ingestion-framework-tfstate-283556840805/uif-apicurio/uat/*"
+    },
+    {
+      "Sid": "TerraformStateExistenceCheck",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::pearson-ingestion-framework-tfstate-283556840805"
+    },
+    {
+      "Sid": "WafLogDeliveryUnscopable",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

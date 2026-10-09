@@ -1,0 +1,218 @@
+{
+  "specversion": "1.0",
+  "id": "550e8400-e29b-41d4-a716-446655440020",
+  "source": "urn:pearson:svc:product-service",
+  "type": "com.pearson.product.product.updated.v1",
+  "time": "2026-07-31T12:00:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "https://schemas.pearson.com/product/product-updated-data/v1",
+  "subject": "product/A101703297180",
+  "correlationid": "c1f5d8f2-2f44-4d9a-9c5f-8b4a5a1d91f7",
+  "partitionkey": "A101703297180|03B",
+  "channel": "event",
+  "dataclassification": "internal",
+  "piipresent": true,
+  "data": {
+    "productId": "A101703297180",
+    "organizationCode": "03B",
+    "description": "Pearson Baccalaureate: Standard Level Mathematics 2nd Edition",
+    "longDescription": "A comprehensive standard level mathematics textbook designed for the IB Diploma Programme, covering all core topics with clear explanations and worked examples.",
+    "inventoryItemStatus": "ACTIVE",
+    "itemType": "Standard",
+    "lineOfBusiness": "School",
+    "disciplineLevel1": "Mathematics",
+    "disciplineLevel2": "Pure Mathematics",
+    "disciplineLevel3": "Calculus",
+    "disciplineLevel4": "Differential Calculus",
+    "languageLevel1": "English",
+    "languageLevel2": "British English",
+    "learnerStageLevel1": "Secondary",
+    "learnerStageLevel2": "Upper Secondary",
+    "nonDisclosureAgreementIndicator": false,
+    "digitalEffectiveStartDate": "2026-01-01",
+    "digitalVersionNumber": "2.0",
+    "unitWeightQuantity": 850,
+    "weightUomCode": "G",
+    "unitLengthQuantity": 27.6,
+    "unitWidthQuantity": 21.0,
+    "unitHeightQuantity": 2.3,
+    "dimensionUomCode": "CM",
+    "qualificationLevelName": "IB Diploma",
+    "isbn13": "9781292431222",
+    "isbn10": "1292431229",
+    "sourceItemNumber": "9781292431222",
+    "parentProductId": "A103000409431",
+    "owningSubsidiaryCountryCode": "GB",
+    "owningSubsidiaryName": "Pearson Education Limited",
+    "ipOwnerCategory": "Pearson",
+    "copyrightYear": 2024,
+    "editionNumber": 2,
+    "productClassificationLevel1": "Textbook",
+    "productClassificationLevel2": "Student Book",
+    "deliveryMethod": "Print",
+    "brand": "Pearson Baccalaureate",
+    "subBrand": "Pearson Baccalaureate Standard Level",
+    "digitalPlatform": "Pearson+",
+    "finalTextPageCount": 384,
+    "accessDurationType": "Subscription",
+    "accessDurationQuantity": "12",
+    "accessDurationUnitCode": "Months",
+    "coverImageLargeUrl": "https://images.pearson.com/products/9781292431222/cover-large.jpg",
+    "coverImageRegularUrl": "https://images.pearson.com/products/9781292431222/cover-regular.jpg",
+    "fulfillmentOrgDetails": {
+      "returnClassCode": "Returnable",
+      "sellingRestrictionCode": "OPEN",
+      "discountCode": "TRADE",
+      "titleStatusCode": "Active",
+      "regionalPublicationDate": "2024-03-15",
+      "imprintName": "Pearson Education",
+      "productTaxClassificationCode": "STANDARD",
+      "relevanceValue": "60",
+      "marketingInitiative": [
+        {
+          "marketingInitiativeName": "Access Advantage",
+          "marketingInitiativeStartDate": "2020-01-01",
+          "marketingInitiativeEndDate": null
+        }
+      ],
+      "backOrderIndicator": false,
+      "defaultSalesOrderSourceTypeCode": "INTERNAL",
+      "readyForManufactureCode": "IF Ready to Print"
+    },
+    "contributors": [
+      {
+        "contributionRoleCode": "Author",
+        "contributorSortSequence": 1,
+        "contributorPreNominalTitle": null,
+        "contributorGivenName": "Ibrahim",
+        "contributorAdditionalName": null,
+        "contributorFamilyName": "Wazir",
+        "contributorPostNominalTitle": null,
+        "affiliationType1": "University",
+        "affiliation1": "University of Manchester"
+      },
+      {
+        "contributionRoleCode": "Author",
+        "contributorSortSequence": 2,
+        "contributorPreNominalTitle": null,
+        "contributorGivenName": "Tim",
+        "contributorAdditionalName": null,
+        "contributorFamilyName": "Garry",
+        "contributorPostNominalTitle": null,
+        "affiliationType1": null,
+        "affiliation1": null
+      }
+    ],
+    "webConsumingSystem": [
+      {
+        "wcsName": "Pearson+",
+        "endDate": "2027-12-31"
+      },
+      {
+        "wcsName": "VitalSource",
+        "endDate": null
+      }
+    ],
+    "associatedPrograms": [
+      "P2100245"
+    ],
+    "standardComponents": [
+      {
+        "componentProductId": "A101701639969",
+        "sequenceNumber": 10,
+        "componentQuantity": 1,
+        "componentEffectiveDate": "2024-01-01",
+        "componentFinalPageCount": 416,
+        "discountType": "TRADE",
+        "discountAmount": 0,
+        "componentDisabledDate": null
+      }
+    ],
+    "customComponents": [
+      {
+        "componentProductId": "A101702995290",
+        "originalWorkPercent": 60,
+        "customWorkPercent": 40,
+        "componentEffectiveDate": "2024-01-01",
+        "componentFinalPageCount": 128,
+        "overridePercent": null,
+        "componentDisabledDate": null
+      }
+    ],
+    "categories": [
+      {
+        "categorySetName": "EPT",
+        "categoryCode": "ENME01",
+        "categoryName": "Aerodynamics",
+        "categoryHierarchyPath": "Engineering > Mechanical Engineering > Aerodynamics",
+        "ecatalogIncludeIndicator": true,
+        "categoryDisabledDate": null
+      },
+      {
+        "categorySetName": "EPT",
+        "categoryCode": "CTET03",
+        "categoryName": "DC / AC Circuits",
+        "categoryHierarchyPath": "Careers & Trades > Electronics Technology & Electricity > DC / AC Circuits",
+        "ecatalogIncludeIndicator": true,
+        "categoryDisabledDate": null
+      },
+      {
+        "categorySetName": "POA",
+        "categoryCode": "185260",
+        "categoryName": "AP Biology A",
+        "categoryHierarchyPath": "AP Biology A",
+        "ecatalogIncludeIndicator": true,
+        "categoryDisabledDate": null
+      }
+    ],
+    "marketingCopy": [
+      {
+        "contentId": "MC-104233",
+        "marketingCopyText": "The definitive introduction to aerodynamics, updated for the 12th edition.",
+        "marketingCopyTypeCode": "LONG_DESCRIPTION",
+        "audienceCode": "CONSUMER",
+        "geoVisibilityCode": "GLOBAL",
+        "owningMarketCode": "US",
+        "contentUrl": "https://api1-dev.pearson.com/uif/v1/marketing-copy/MC-104233"
+      }
+    ],
+    "coverImageHighResolutionUrl": "https://images.pearson.com/i/79475d28-e560-442f-9d0c-afceca8a145a/A1017033386402HR.jpg",
+    "courseDurationQuantity": "4",
+    "courseDurationUnitCode": "hours",
+    "productUrl": "https://www.pearson.com/en-us/subject-catalog/p/example-product/P200000001234",
+    "enablingTechnology": [
+      {
+        "enablingTechnologyLevel1": "Content Capability",
+        "enablingTechnologyLevel2": "eText 2.0"
+      },
+      {
+        "enablingTechnologyLevel1": "Platform",
+        "enablingTechnologyLevel2": "MyLab"
+      }
+    ],
+    "instructorResourceFiles": [
+      {
+        "fileName": "instructor-manual-ch01",
+        "fileExtensionCode": "pdf",
+        "fileSize": "2.4 MB",
+        "linkText": "Instructor Manual, Chapter 1",
+        "fileUrl": "https://media.pearson.com/irc/A100060875436/instructor-manual-ch01.pdf",
+        "mediaFileType": "DOCUMENT",
+        "mediaStatus": "ACTIVE",
+        "fileRankSequence": 1,
+        "fileDescription": "Chapter 1 teaching notes and answer key."
+      },
+      {
+        "fileName": "lecture-slides-ch01",
+        "fileExtensionCode": "pptx",
+        "fileSize": "8.1 MB",
+        "linkText": "Lecture Slides, Chapter 1",
+        "fileUrl": "https://media.pearson.com/irc/A100060875436/lecture-slides-ch01.pptx",
+        "mediaFileType": "PRESENTATION",
+        "mediaStatus": "ACTIVE",
+        "fileRankSequence": 2,
+        "fileDescription": null
+      }
+    ]
+  }
+}

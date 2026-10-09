@@ -1,0 +1,459 @@
+name: Promote event
+
+# Put the artifacts a build tag names into an environment, prove they run, and
+# record it as a release tag. Modelled on promote-echo.yml (UIFPE-690).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT THIS STILL NEEDS, as of 2026-10-01. The four blockers this header used
+# to list are all resolved: the root reads content-addressed keys out of
+# uif-event-dev-release-artifacts, release-event.yml stages the six artifacts
+# and records them in the tag manifest, envs/uat.tfvars and
+# backends/uat.s3.tfbackend exist, and stacks/event/scripts/ is populated. What
+# is left is environment setup rather than code -- bootstrap-environment.sh uat
+# has to run once -- plus the rule that only a tag cut after the manifest
+# change can be promoted at all: event/v0.10.0 carries no artifacts block.
+#
+# AND THIS WORKFLOW CANNOT DO THE FIRST CONVERGE. assert-app-only-plan.sh
+# refuses any plan touching infrastructure, and against an empty environment
+# the plan is hundreds of infrastructure creates -- so it exits 1 before
+# applying anything. A deploy-event-infra.yml has to converge the environment
+# first, exactly as deploy-echo-infra.yml does for echo. That is not a
+# limitation to work around; it is the division of authority working.
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# THE DIVISION OF AUTHORITY, which is the whole reason this is its own file.
+# A converge workflow may change the SHAPE of an environment. This may only
+# change WHICH VERSION runs in it -- and that is enforced, not intended:
+# assert-app-only-plan.sh reads the plan and refuses it if anything outside the
+# application layer would move.
+#
+# THE APPLICATION LAYER IS SIX RESOURCES, DERIVED NOT LISTED. Four Lambdas
+# (pipeline_controller, dlq_recorder, subscription_provisioner, event_redrive)
+# and two Glue jobs (event_fabric_processor, event_fabric_recovery). The list is
+# derived by scripts/app-only-addresses.sh rather than written here, for the
+# reason echo's header gives: a hand-written list stops matching the first time
+# somebody adds a Lambda, and the failure is a refused promote weeks later with
+# no obvious cause. Verified: echo's copy of that script, run unmodified against
+# stacks/event/infrastructure/terraform, prints exactly those six.
+#
+# EVENT'S assert-app-only-plan.sh MUST BE APICURIO'S VARIANT, NOT ECHO'S.
+# The two diverged deliberately on 2026-09-25. Echo's permits a `create,delete`
+# pair for aws_lambda_layer_version, because every argument of that resource is
+# ForceNew and a promoted layer therefore plans as create+destroy. Event
+# declares NO layer versions: its Lambdas change `s3_key` in place and its Glue
+# jobs change `script_location` in place, so nothing here should ever plan as a
+# replacement. Copying echo's variant would silently permit a replacement that,
+# for this stack, is the drift the script exists to catch.
+#
+# ONE ROOT, NOT TWO. Echo is two Terraform roots with two states and plans both
+# in one job, in order, because its gold root looks up a role the main root
+# creates. Event is a single root, so the plan/assert/apply movement below
+# appears once. Its backend filename convention is `<env>.s3.tfbackend` -- the
+# gold root's and product's, not the main echo root's `<env>.hcl`.
+#
+# NO stem INDIRECTION. promote-echo.yml maps environment `uat` to a stem
+# `uat-uif`, because a retiring `echo-uat-*` stack shares the account and naming
+# is the only isolation between them. Event has no legacy twin: every resource
+# is `uif-event-{env}-*` and always has been, so the environment name is used
+# directly. Do not add a stem here by symmetry with echo.
+#
+# NO UI. Echo promotes a UI bundle and re-hashes it with config.json excluded.
+# Event serves no UI -- src/NO-IMAGE.md records that it ships no container
+# either -- so there is no publish step and no bundle in the release tag.
+#
+# THE RELEASE TAG IS THE EVIDENCE SMOKE PASSED. Cutting it before smoke would
+# make it a record of an intention. Event has NO integration tier -- qe/ci.sh
+# runs `python -m pytest qe -q` over six unit modules -- so the smoke step below
+# FAILS and names what is missing rather than skipping. That is deliberate, and
+# it is what echo's did until UIFPE-555 gave it qe/integration. A promote that
+# cut a tag with no smoke behind it would quietly destroy the one property every
+# other part of this model is built on.
+#
+# A TAG CUT BY release-event.yml DOES NOT FIRE THE push TRIGGER BELOW. It pushes
+# with the default GITHUB_TOKEN, and GitHub starts no workflow from an event
+# that token creates. The trigger fires for a tag a person pushes; otherwise a
+# promote is a workflow_dispatch run WITH THE TAG AS ITS REF (the "Use workflow
+# from" picker), which is how echo's promotes run too. A dispatch from a branch
+# is refused in the resolve job rather than failing later with an unrelated
+# error.
+#
+# SAFE TO MERGE BEFORE ANY OF THE ABOVE EXISTS. The mode comes from a repository
+# variable defaulting to `skip`, so a tag push with EVENT_UAT_PROMOTE unset
+# skips the job and never evaluates its `environment:` reference. Naming a
+# GitHub Environment that does not exist makes GitHub create it with no reviewer
+# and no tag policy.
+#
+# REPO VARIABLES (Settings -> Secrets and variables -> Actions -> Variables)
+#   EVENT_UAT_PROMOTE   unset|skip = do nothing (DEFAULT)
+#                       run        = copy, apply the app-only plan, smoke, tag
+#   EVENT_PROD_PROMOTE  same vocabulary, for prod
+#
+# Leave these unset outside a deploy window. They are a deploy-window latch,
+# not configuration.
+#
+# THE SCRIPT SET this file needs under stacks/event/scripts/. Own copies, not
+# references into stacks/echo/scripts/ -- the repo's pattern is a copy per
+# stack, and assert-app-only-plan.sh's own header records that a shared script
+# with a stack conditional was considered and rejected, because the condition
+# would have to name a stack. Measured against echo's copies, how much changes:
+#
+#   resolve-deploy-mode.sh    verbatim  -- takes every input as a flag
+#   app-only-addresses.sh     verbatim  -- verified against event's root
+#   next-release-tag.sh       verbatim  -- reads release/<env>/<date>.<n>
+#   read-manifest.sh          verbatim  -- generic over manifest field paths
+#   assert-app-only-plan.sh   APICURIO'S copy, per the note above
+#   copy-artifacts.sh         adapt     -- echo's has 4 echo-specific lines
+#
+# check-version.sh, artifact-hash.sh, zip-artifact.sh, stage-artifacts.sh and
+# release-manifest.sh belong to release-event.yml rather than to this file.
+# stage-artifacts.sh is the one that is genuinely per-stack: it defines the
+# artifact SET, which for event is four zips and two Glue scripts.
+
+on:
+  push:
+    tags:
+      - "event/v*"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [uat, prod]
+        default: uat
+      promote:
+        description: "Promote action"
+        type: choice
+        options: [run, skip]
+        default: skip
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+
+  # Must not drift from the workflow that converges alongside this one: a saved
+  # plan file is only valid for the Terraform version that wrote it. Same pin as
+  # promote-echo.yml and deploy-echo-infra.yml.
+  TF_VERSION: "1.15.8"
+
+jobs:
+  resolve:
+    name: What this run will do
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.mode.outputs.environment }}
+      promote: ${{ steps.mode.outputs.promote }}
+    steps:
+      # fetch-depth 0 AND fetch-tags: read-manifest.sh reads the ANNOTATED TAG
+      # message, which a shallow clone does not carry.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # actions/checkout fetches the resolved COMMIT SHA into refs/tags/<name>,
+      # which produces a LIGHTWEIGHT tag locally and discards the annotation --
+      # and the annotation IS the manifest. read-manifest.sh then correctly
+      # refuses with "is a LIGHTWEIGHT tag, which has no message". `fetch-tags`
+      # above asks for +refs/tags/* but shares one fetch with the sha refspec
+      # and does not reliably win, so the tag object is re-fetched explicitly.
+      # Verified on apicurio: without this, a dispatch failed at the first
+      # manifest read (run 35603264803).
+      - name: Re-fetch the annotated tag object
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          type="$(git cat-file -t "refs/tags/${TAG}")"
+          [ "$type" = "tag" ] \
+            || { echo "::error::refs/tags/${TAG} is a ${type}, not an annotated tag object, so it carries no manifest. The re-fetch did not recover the annotation."; exit 1; }
+          echo "::notice::${TAG} is an annotated tag object; its manifest is readable."
+
+      - id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_ENV: ${{ inputs.environment }}
+          IN_PROMOTE: ${{ inputs.promote }}
+          VAR_UAT: ${{ vars.EVENT_UAT_PROMOTE }}
+          VAR_PROD: ${{ vars.EVENT_PROD_PROMOTE }}
+        run: |
+          set -euo pipefail
+          resolver=stacks/event/scripts/resolve-deploy-mode.sh
+
+          environment="$("$resolver" \
+            --event "$EVENT" --input "${IN_ENV:-}" --var "uat" \
+            --allowed "uat,prod" --default "uat")"
+
+          case "$environment" in
+            uat)  var_value="${VAR_UAT:-}" ;;
+            prod) var_value="${VAR_PROD:-}" ;;
+          esac
+
+          # DEFAULT skip, which is what makes this safe to merge ahead of the
+          # environment existing.
+          promote="$("$resolver" \
+            --event "$EVENT" --input "${IN_PROMOTE:-}" --var "$var_value" \
+            --allowed "skip,run" --default "skip")"
+
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "promote=$promote" >> "$GITHUB_OUTPUT"
+
+          echo "### event promote" >> "$GITHUB_STEP_SUMMARY"
+          echo "- environment: \`${environment}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- action: \`${promote}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tag: \`${GITHUB_REF_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$promote" = "skip" ]; then
+            echo "::notice::promote=skip, so nothing will be copied or applied. Set EVENT_<ENV>_PROMOTE, or dispatch with promote=run."
+          fi
+
+      # Every step below treats github.ref_name as the build tag. Dispatched
+      # from a branch, it is the branch name: the gate check would be skipped
+      # without a word and the promote job would fail at the tag re-fetch for a
+      # reason that names neither. Refuse here instead. Gated on the mode, so a
+      # skip dispatch from a branch stays the harmless no-op it always was.
+      - name: A promote runs from an event build tag
+        if: steps.mode.outputs.promote != 'skip'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          case "$REF" in
+            refs/tags/event/v*) echo "::notice::promoting ${REF#refs/tags/}." ;;
+            *)
+              echo "::error::this run's ref is ${REF}, not an event/vX.Y.Z build tag. Dispatch with the tag selected under 'Use workflow from', not a branch. Nothing has been copied or applied."
+              exit 1 ;;
+          esac
+
+      # The gate is the build tag's evidence. Promoting from a tag whose gate
+      # did not pass would deploy code CI never approved. Gated on the mode too,
+      # so a no-op run does not go red for nothing.
+      - name: The tag's gate must have passed
+        if: startsWith(github.ref, 'refs/tags/') && steps.mode.outputs.promote != 'skip'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gate="$(stacks/event/scripts/read-manifest.sh "$TAG" gate.conclusion)"
+          [ "$gate" = "success" ] \
+            || { echo "::error::${TAG}'s gate conclusion is '${gate}', not success. Refusing to promote a tag with no passing gate."; exit 1; }
+          echo "::notice::${TAG} carries a passing gate."
+
+  promote:
+    name: Promote ${{ github.ref_name }} into ${{ needs.resolve.outputs.environment }}
+    needs: resolve
+    if: needs.resolve.outputs.promote == 'run'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.environment }}
+    permissions:
+      # write, and only for the release tag this job pushes.
+      contents: write
+      id-token: write
+    # The SAME group a deploy-event-infra.yml must use: a promote and an infra
+    # apply must never interleave on one state file. Never cancel in progress --
+    # a cancelled apply can leave the state lock held.
+    concurrency:
+      group: event-deploy-${{ needs.resolve.outputs.environment }}
+      cancel-in-progress: false
+    env:
+      ENV_NAME: ${{ needs.resolve.outputs.environment }}
+      TAG: ${{ github.ref_name }}
+      ROOT: stacks/event/infrastructure/terraform
+      # `<env>.s3.tfbackend`, which is the gold root's convention and product's,
+      # NOT the main echo root's `backends/<env>.hcl`. Both conventions are live
+      # in this repo; assuming the wrong one makes the preflight below refuse
+      # every run, looking for a file nobody is going to write.
+      BACKEND: backends/${{ needs.resolve.outputs.environment }}.s3.tfbackend
+      SMOKE_DIR: stacks/event/qe/integration
+    steps:
+      # fetch-depth 0: read-manifest.sh reads the annotated tag message, and
+      # next-release-tag.sh reads the existing release tags to pick the suffix.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Re-fetch the annotated tag object
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+
+      # Asserted before anything is copied or planned, so a run against an
+      # environment this root does not describe stops here rather than after a
+      # copy has already put objects in a bucket.
+      - name: This root has this environment's files
+        run: |
+          set -euo pipefail
+          missing=""
+          for f in "${ROOT}/${BACKEND}" "${ROOT}/envs/${ENV_NAME}.tfvars"; do
+            [ -f "$f" ] || missing="${missing} ${f}"
+          done
+          [ -z "$missing" ] \
+            || { echo "::error::this environment is not described by the event root. Missing:${missing}"; exit 1; }
+
+      # TWO STEPS, ONE PER ENVIRONMENT, each naming its secret literally. An
+      # && / || ternary would be worse: an empty secret is falsy, so a missing
+      # prod secret would fall through to uat's role without a word.
+      #
+      # The dev workflow borrows the product domain's AWS_ROLE_ARN_DEV. uat and
+      # prod assume echo's deploy role, which is the principal
+      # bootstrap-environment.sh attaches this stack's derived policy to, under
+      # the same secret name promote-echo.yml uses. uat's secret exists; prod's
+      # does not, and neither does a prod environment.
+      - name: Assume uat's deploy role
+        if: needs.resolve.outputs.environment == 'uat'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ECHO_UAT }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Assume prod's deploy role
+        if: needs.resolve.outputs.environment == 'prod'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ECHO_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Prove which role this run assumed
+        run: |
+          set -euo pipefail
+          arn="$(aws sts get-caller-identity --query Arn --output text)"
+          echo "::notice::assumed ${arn}"
+          case "$arn" in
+            *"/uif-echo-${ENV_NAME}-deploy-role/"*) ;;
+            *)
+              echo "::error::this run assumed ${arn}, not uif-echo-${ENV_NAME}-deploy-role. Nothing has been copied or planned."
+              exit 1 ;;
+          esac
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # COPY, never rebuild. copy-artifacts.sh takes the SOURCE bucket from the
+      # manifest rather than as a flag, so nobody can promote from the wrong
+      # bucket while every hash still checks out, and it verifies each object is
+      # present at the version the tag names. Both release buckets sit in one
+      # account, so the copy is server-side and no bytes cross the runner.
+      - name: Copy the artifacts this tag names into ${{ needs.resolve.outputs.environment }}
+        run: |
+          set -euo pipefail
+          stacks/event/scripts/copy-artifacts.sh \
+            --tag "$TAG" \
+            --to-bucket "uif-event-${ENV_NAME}-release-artifacts" \
+            --tfvars "${PWD}/artifacts.auto.tfvars.json" \
+            --tsv "${PWD}/promoted-rows.tsv"
+          echo "PROMOTED_ROWS=$(grep -c . promoted-rows.tsv)" >> "$GITHUB_ENV"
+
+      # The promoted digests are how the root resolves every s3_key and
+      # script_location. Nothing in this environment stages from source, so if
+      # this file is absent the promotion is what is incomplete -- an artifact
+      # guard in the root should refuse the plan rather than let it apply keys
+      # that point at nothing (echo's artifact_guard.tf, UIFPE-608).
+      - name: Put the promoted hashes where the root reads them
+        run: cp artifacts.auto.tfvars.json "${ROOT}/artifacts.auto.tfvars.json"
+
+      - name: Init
+        working-directory: stacks/event/infrastructure/terraform
+        run: terraform init -reconfigure -input=false -backend-config="${BACKEND}"
+
+      # Plan the FULL configuration, then prove it changes nothing but the
+      # application layer. No -target: a full plan containing only application
+      # changes already IS an app-only deploy, so proving the precondition is
+      # better than narrowing the apply. Infrastructure drift becomes a stop
+      # that names itself rather than a passenger inside an unrelated apply.
+      - name: Plan
+        working-directory: stacks/event/infrastructure/terraform
+        run: terraform plan -input=false -var-file="envs/${ENV_NAME}.tfvars" -out=tf.plan
+
+      # `terraform show -json` is piped STRAIGHT into the script and never
+      # written to a file, a log or an artifact: a plan carries generated values
+      # in clear, and only resource ADDRESSES may be printed.
+      #
+      # Exit 3 means the plan is empty -- these artifacts are already deployed,
+      # so there is nothing to apply and that is not a failure.
+      - name: Assert the plan touches only the application layer
+        id: blast
+        working-directory: stacks/event/infrastructure/terraform
+        run: |
+          set -euo pipefail
+          addrs="$(../../scripts/app-only-addresses.sh .)"
+          set +e
+          # shellcheck disable=SC2086
+          terraform show -json tf.plan | ../../scripts/assert-app-only-plan.sh $addrs
+          status=$?
+          set -e
+          case "$status" in
+            0) echo "apply=true"  >> "$GITHUB_OUTPUT" ;;
+            3) echo "apply=false" >> "$GITHUB_OUTPUT"
+               echo "::notice::the event root is already at these artifacts — nothing to apply." ;;
+            *) exit "$status" ;;
+          esac
+
+      - name: Apply the reviewed plan
+        if: steps.blast.outputs.apply == 'true'
+        working-directory: stacks/event/infrastructure/terraform
+        run: terraform apply -input=false tf.plan
+
+      # ── the evidence ─────────────────────────────────────────────────────
+      #
+      # THIS STEP FAILS BY DESIGN TODAY, and that is the point. qe/ holds six
+      # unit modules and no integration tier, so there is nothing that can
+      # assert the promoted code is reachable in this environment. A release tag
+      # means "this version ran here and passed"; cutting one with no suite
+      # behind it would make every release tag in this repo worth less.
+      #
+      # What the suite needs to assert when it is written, taking echo's
+      # qe/integration as the model: that the deployed surface responds, and
+      # that THIS promotion's bytes are what is deployed -- for event that is
+      # the four Lambdas' code hashes and the two Glue jobs' script_location
+      # carrying the promoted shas. Reachability alone passes against any
+      # converged stack and would let a promote that copied nothing go green.
+      #
+      # A SKIP MUST NOT LOOK LIKE A PASS. pytest exits 0 on a module-level skip,
+      # so a suite that skips when it cannot discover its target would leave
+      # this step green and cut a tag certifying nothing. Echo solved that with
+      # UIF_ECHO_SMOKE_REQUIRED, read by its conftest; event's suite wants the
+      # same switch from the day it exists.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest for the smoke suite
+        run: python -m pip install --disable-pip-version-check --quiet pytest
+
+      - name: Smoke
+        env:
+          UIF_EVENT_SMOKE_REQUIRED: "1"
+        run: |
+          set -euo pipefail
+          if [ ! -d "$SMOKE_DIR" ]; then
+            echo "::error::${SMOKE_DIR} does not exist, so this promote cannot be certified and no release tag will be cut."
+            echo "The artifacts ARE copied and applied: ${ENV_NAME} is running ${TAG}. What is missing is the evidence."
+            echo "Write the suite before relying on a release tag for this stack. stacks/echo/qe/integration is the model."
+            exit 1
+          fi
+          python -m pytest "$SMOKE_DIR" -v
+
+      # Cut ONLY after green smoke. The annotation records what was promoted so
+      # the tag is readable offline with `git show`, and so a rollback has
+      # something to name.
+      - name: Cut the release tag
+        if: success()
+        run: |
+          set -euo pipefail
+          name="$(stacks/event/scripts/next-release-tag.sh "$ENV_NAME")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$name" -m "$(printf '%s:\n  promoted_from: %s\n  environment: %s\n  artifacts: %s at the versions %s names\n  smoke: passed\n' \
+            "$name" "$TAG" "$ENV_NAME" "${PROMOTED_ROWS}" "$TAG")"
+          git push origin "$name"
+          echo "::notice::cut $name"
+          {
+            echo "### Released"
+            echo "- \`$name\` from \`$TAG\` into \`$ENV_NAME\`"
+            echo "- ${PROMOTED_ROWS} artifacts at the versions the manifest names"
+          } >> "$GITHUB_STEP_SUMMARY"

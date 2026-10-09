@@ -1,0 +1,192 @@
+# Deploy echo gold — Dev
+#
+# The gold layer's own Terraform root (stacks/echo/infrastructure/terraform-gold,
+# ADR-0018 step 2): the transform/reconcile jobs, the dispatcher, the Transform
+# UI's Lambdas, the config table and the gold buckets. Plus the two deploy steps
+# that belong with them: the Glue script sync and the Transform UI build.
+#
+# HOW TO CHOOSE WHAT RUNS — the same variable-driven pattern as the echo and
+# beacon deploys, because GitHub only shows "Run workflow" for workflows on the
+# default branch and ours live on develop.
+#
+#   REPO VARIABLE (Settings -> Secrets and variables -> Actions -> Variables)
+#     GOLD_INFRA   unset|skip = tests only (default)
+#                  plan       = terraform plan, changes nothing
+#                  apply      = plan + apply + script sync + UI deploy
+#
+# Leave GOLD_INFRA on apply: like the product deploy, this root applies
+# unattended on every merge that touches its paths.
+
+name: Deploy echo gold — Dev
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "stacks/echo/infrastructure/terraform-gold/**"
+      - "stacks/echo/src/apps/pipeline/generic_gold_*.py"
+      - "stacks/echo/src/apps/pipeline/gold_cdc.py"
+      # UIFPE-544: the nightly statistics job, the monthly pack, and their
+      # pure libraries. A library missing here never redeploys, and the job
+      # that imports it then runs against a stale copy in S3.
+      - "stacks/echo/src/apps/pipeline/gold_ops_summarize.py"
+      - "stacks/echo/src/apps/pipeline/gold_ops_export.py"
+      - "stacks/echo/src/libs/gold_stats.py"
+      - "stacks/echo/src/libs/gold_report.py"
+      # Per file, NOT lambdas/**: that directory also holds the non-gold root's
+      # Lambdas (scheduler_dispatcher, gcs_replicator, silver_bq_replicator), and a
+      # glob would apply the gold root on a silver change. ADD EVERY NEW GOLD LAMBDA
+      # HERE - one that is missing never redeploys, because its zip is built by
+      # archive_file at plan time and nothing else triggers this workflow.
+      - "stacks/echo/src/apps/lambdas/gold_dispatcher.py"
+      - "stacks/echo/src/apps/lambdas/gold_announce.py"
+      - "stacks/echo/src/apps/lambdas/gold_alert_notify.py"
+      - "stacks/echo/src/apps/lambdas/gold_serving_sync.py"
+      - "stacks/echo/src/apps/lambdas/gold_serving_api.py"
+      - "stacks/echo/src/apps/lambdas/compile_preview.py"
+      - "stacks/echo/src/apps/lambdas/submit.py"
+      - "stacks/echo/src/apps/lambdas/grain_probe.py"
+      - "stacks/echo/src/apps/lambdas/ai_draft.py"
+      - "stacks/echo/src/apps/cli/**"
+      - "stacks/echo/src/libs/gold_frequencies.py"
+      - "stacks/echo/src/libs/gold_resources.py"
+      - "stacks/echo/src/libs/gold_serving.py"
+      - "stacks/echo/src/libs/gold_telemetry.py"
+      # Shared runtime code the alert-notify zip copies in (platform/python/README.md)
+      - "platform/python/**"
+      - "stacks/echo/src/apps/environments.json"
+      - "stacks/echo/transform-ui/**"
+      - "stacks/echo/qe/gold/**"
+      # UIFPE-543: the gold root derives one alarm set per entity from these
+      # files, so a new entity YAML has to apply the root too.
+      - "domains/*/src/apps/pipelines/base/*.yaml"
+      - ".github/workflows/deploy-echo-gold-dev.yml"
+  workflow_dispatch:
+    inputs:
+      infra:
+        description: "Terraform: skip | plan | apply"
+        required: false
+        default: "plan"
+        type: choice
+        options: [skip, plan, apply]
+
+concurrency:
+  group: deploy-echo-gold-dev
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve what runs (echo gold)
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.pick.outputs.infra }}
+    steps:
+      - id: pick
+        env:
+          INPUT_INFRA: ${{ inputs.infra }}
+          VAR_INFRA: ${{ vars.GOLD_INFRA }}
+        run: |
+          INFRA="${INPUT_INFRA:-${VAR_INFRA:-skip}}"
+          case "$INFRA" in
+            skip|plan|apply) ;;
+            *) echo "GOLD_INFRA must be skip, plan or apply (got '$INFRA')"; exit 1 ;;
+          esac
+          echo "infra=$INFRA" >> "$GITHUB_OUTPUT"
+          echo "::notice::echo gold dev — infra=$INFRA"
+
+  tests:
+    name: tests (echo gold)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Runtime + control-plane suite
+        run: |
+          pip install -r domains/product/qe/requirements-dev.txt
+          python -m pytest stacks/echo/qe/gold -q
+
+  infra:
+    name: infra ${{ needs.resolve.outputs.infra }} (echo gold)
+    needs: [resolve, tests]
+    if: needs.resolve.outputs.infra != 'skip'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: dev
+      INFRA: ${{ needs.resolve.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: eu-west-1
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform plan
+        working-directory: stacks/echo/infrastructure/terraform-gold
+        run: |
+          make init ENV=$ENV
+          make plan ENV=$ENV
+
+      - name: Terraform apply
+        if: env.INFRA == 'apply'
+        working-directory: stacks/echo/infrastructure/terraform-gold
+        run: make apply ENV=$ENV
+
+      - name: Service URLs for the Transform UI build
+        if: env.INFRA == 'apply'
+        working-directory: stacks/echo/infrastructure/terraform-gold
+        run: |
+          for pair in VITE_COMPILE_PREVIEW_URL=compile_preview_url VITE_GRAIN_PROBE_URL=grain_probe_url \
+                      VITE_AI_DRAFT_URL=ai_draft_url VITE_SUBMIT_URL=submit_url; do
+            echo "${pair%%=*}=$(terraform output -raw "${pair##*=}")" >> "$GITHUB_ENV"
+          done
+
+      - uses: actions/setup-node@v4
+        if: env.INFRA == 'apply'
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: stacks/echo/transform-ui/package-lock.json
+
+      - name: Build + deploy Transform UI (shared RELAY CloudFront, UIFPE-99)
+        if: env.INFRA == 'apply'
+        working-directory: stacks/echo/transform-ui
+        env:
+          UI_BUCKET: uif-echo-dev-ui
+          DISTRIBUTION_ID: E2K0DHB6UBC1N5
+        run: |
+          # UIFPE-471. These two values are owned by
+          # stacks/echo/infrastructure/terraform (outputs ui_bucket_name and
+          # ui_cloudfront_id) but are literals here, because this workflow does
+          # not init that root. A rename there breaks this deploy silently and
+          # only AFTER the build - which is exactly what happened on
+          # 2026-09-20, when the bucket became uif-echo-dev-ui and the
+          # distribution became E2K0DHB6UBC1N5. Check both up front so the
+          # next rename fails in seconds with somewhere to look.
+          aws s3api head-bucket --bucket "$UI_BUCKET" 2>/dev/null || {
+            echo "::error::UI bucket $UI_BUCKET does not exist. It is owned by stacks/echo/infrastructure/terraform, output ui_bucket_name - read the current value from there and update this workflow."
+            exit 1
+          }
+          aws cloudfront get-distribution --id "$DISTRIBUTION_ID" >/dev/null 2>&1 || {
+            echo "::error::CloudFront distribution $DISTRIBUTION_ID does not exist. It is owned by the same Terraform root, output ui_cloudfront_id."
+            exit 1
+          }
+          npm ci
+          npm run build
+          aws s3 sync dist/ "s3://$UI_BUCKET/m/transform/" --delete
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/m/transform/*"

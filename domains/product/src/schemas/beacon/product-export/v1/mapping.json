@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+
+  "sources": [
+    {"name": "product",
+     "path": "glue_catalog.eds_dev_gold_product.product",
+     "format": "iceberg"}
+  ],
+
+  "joins": [],
+
+  "mappings": [
+    {"type": "one_to_one", "source": "product.inventory_item_id", "target": "inventoryItemId", "data_type": "long"},
+    {"type": "one_to_one", "source": "product.organization_id",  "target": "organizationId", "data_type": "long"},
+    {"type": "one_to_one", "source": "product.product_id",            "target": "productId"},
+    {"type": "one_to_one", "source": "product.isbn13",          "target": "isbn13"},
+    {"type": "one_to_one", "source": "product.description",     "target": "title"},
+    {"type": "one_to_one", "source": "product.long_description", "target": "description"},
+    {"type": "one_to_one", "source": "product.item_type",        "target": "itemType"},
+    {"type": "one_to_one", "source": "product.line_of_business",  "target": "lineOfBusiness"},
+    {"type": "one_to_one", "source": "product.language_level1",        "target": "language"},
+    {"type": "one_to_one", "source": "product.copyright_year",   "target": "copyrightYear", "data_type": "int"},
+
+    {"type": "many_to_one",
+     "sources": ["product.discipline_level1", "product.discipline_level2"],
+     "target": "discipline",
+     "expression": "concat_ws(' / ', product.discipline_level1, product.discipline_level2)"},
+
+    {"type": "literal", "target": "sourceSystem", "value": "gold-product"},
+    {"type": "literal", "target": "exportedAt",   "value": "${run_timestamp}"}
+  ],
+
+  "validations": [
+    {"name": "inventory_item_id_not_null", "condition": "inventoryItemId IS NOT NULL"},
+    {"name": "product_id_not_null",       "condition": "productId IS NOT NULL"},
+    {"name": "isbn13_shape",        "condition": "coalesce(length(isbn13), 13) = 13"}
+  ],
+  "rejected_path": "s3://eds-dev-beacon-product/rejected/product-export/${batch_id}/",
+
+  "output": {
+    "targets": [
+      {"format": "parquet",
+       "path": "s3://eds-dev-beacon-product/staging/product-export/${batch_id}/canonical/",
+       "mode": "overwrite"}
+    ]
+  },
+  "policies": {"on_empty_input": "fail"}
+}

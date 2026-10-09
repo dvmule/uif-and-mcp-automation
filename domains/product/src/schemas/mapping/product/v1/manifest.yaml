@@ -1,0 +1,856 @@
+domain: product
+version: v1
+
+# ── Semantic layer ──────────────────────────────────────────────────────────
+# source_system + canonical_lineage describe the PDH→canonical contract,
+# independent of which lake tier physically delivers the data. See ADR-13;
+# conditional entries (discriminator + branches) per ADR-0003.
+
+source_system:
+  name: "Oracle EBS PDH"
+  modules: ["Inventory", "Item Catalog"]
+  contact: "ebs-platform@pearson.com"
+
+# Org registry: MTL_PARAMETERS, ingested to Silver 2026-08-05 and joined as a
+# dimension (the `org_params` source below). The static `org_groups` map that
+# stood in for it — a 27-entry org_code_map plus a duplicated uk_orgs id list,
+# business-provided 2026-07-29 — was removed on 2026-08-06 per ADR-0005
+# recommendation item 3. Verified before the swap: the dimension carries all 27
+# orgs that have item rows with codes byte-identical to the retired map, and
+# ORGANIZATION_CODE LIKE '01%' selects exactly the 7 ids the retired uk_orgs
+# listed. Both org rules now live where the data does:
+#   * UK orgs   = ORGANIZATION_CODE starting '01'
+#   * master org = the row whose ORGANIZATION_ID = MASTER_ORGANIZATION_ID (82 in
+#     dev). Documented, not configured — no mapping reads it.
+
+canonical_lineage:
+  inventoryItemId:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: INVENTORY_ITEM_ID
+    role:       pk
+
+  organizationId:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: ORGANIZATION_ID
+    role:       pk
+
+  productId:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: SEGMENT1
+
+  organizationCode:
+    pdh_table:  MTL_PARAMETERS
+    pdh_column: ORGANIZATION_CODE
+    pdh_grain:  org-level dimension, joined on ORGANIZATION_ID
+
+  description:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: DESCRIPTION
+
+  itemType:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: ITEM_TYPE
+
+  lineOfBusiness:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR40
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  disciplineLevel1:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR5
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  disciplineLevel2:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR6
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  disciplineLevel3:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR7
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  disciplineLevel4:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR8
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  longDescription:
+    pdh_table:  MTL_SYSTEM_ITEMS_TL
+    pdh_column: LONG_DESCRIPTION
+    pdh_filter: "LANGUAGE = 'US'"
+    pdh_grain:  org-level, joined on (INVENTORY_ITEM_ID, ORGANIZATION_ID)
+
+  inventoryItemStatus:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: INVENTORY_ITEM_STATUS_CODE
+    pdh_grain:  org-level (driving-table column)
+
+  languageLevel1:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR27
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  languageLevel2:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR28
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  learnerStageLevel1:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR21
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  learnerStageLevel2:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR22
+    pdh_filter: "ATTR_GROUP_ID = 802"
+    pdh_grain:  item-level
+
+  nonDisclosureAgreementIndicator:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR24, pdh_filter: "ATTR_GROUP_ID = 1418" }
+      - { when: "ELSE",            pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR16, pdh_filter: "ATTR_GROUP_ID = 821" }
+
+  digitalEffectiveStartDate:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: D_EXT_ATTR1
+    pdh_filter: "ATTR_GROUP_ID = 1261"
+    pdh_grain:  item-level
+
+  digitalVersionNumber:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR1
+    pdh_filter: "ATTR_GROUP_ID = 1261"
+    pdh_grain:  item-level
+
+  unitWeightQuantity:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: UNIT_WEIGHT
+    pdh_grain:  org-level (driving row)
+
+  weightUomCode:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: WEIGHT_UOM_CODE
+    pdh_grain:  org-level (driving row)
+
+  unitLengthQuantity:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: UNIT_LENGTH
+    pdh_grain:  org-level (driving row)
+
+  unitWidthQuantity:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: UNIT_WIDTH
+    pdh_grain:  org-level (driving row)
+
+  unitHeightQuantity:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: UNIT_HEIGHT
+    pdh_grain:  org-level (driving row)
+
+  dimensionUomCode:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: DIMENSION_UOM_CODE
+    pdh_grain:  org-level (driving row)
+
+  qualificationLevelName:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR2
+    pdh_filter: "ATTR_GROUP_ID = 755"
+    pdh_grain:  org-level
+
+  accessDurationType:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR3, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 773" }
+
+  accessDurationQuantity:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR9, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2, pdh_filter: "ATTR_GROUP_ID = 773" }
+
+  accessDurationUnitCode:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR6, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR3, pdh_filter: "ATTR_GROUP_ID = 773" }
+
+  # Course duration (UIFPE-270, owner's reference query 2026-09-07): digital
+  # items carry the pair in PSON_EXTER_PROD_CLASSIFICATION (1381) slots 8/11,
+  # everything else in PSON_COURSE_DURATION (1341) slots 1/2.
+  courseDurationQuantity:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR8, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1341" }
+
+  courseDurationUnitCode:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR11, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2,  pdh_filter: "ATTR_GROUP_ID = 1341" }
+
+  # The three cover images carry a URL normalization on top of the branch
+  # pick (business rule 2026-08-06, declared per-column in the intake notes
+  # and implemented in the mapping SQL final SELECT): '/A...' DAM paths get
+  # the DAM base URL, site-relative paths get https://images.pearson.com
+  # ('/bigcovers' for Large, '/covers' for Regular), everything else passes
+  # through — except HighRes, where anything that is not a DAM path is NULL.
+  coverImageLargeUrl:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR3, pdh_filter: "ATTR_GROUP_ID = 1405" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR3, pdh_filter: "ATTR_GROUP_ID = 1168" }
+
+  coverImageRegularUrl:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1405" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR4, pdh_filter: "ATTR_GROUP_ID = 1168" }
+
+  coverImageHighResolutionUrl:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2, pdh_filter: "ATTR_GROUP_ID = 1405" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR5, pdh_filter: "ATTR_GROUP_ID = 1168" }
+
+  marketingCopy:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: "C_EXT_ATTR1 (contentId), C_EXT_ATTR2 (description), C_EXT_ATTR3 (type), C_EXT_ATTR4 (audience), C_EXT_ATTR5 (geoVisibility), C_EXT_ATTR7 (owningMarket), contentUrl = {content_url_base}/marketing-copy/<contentId> (derived, UIFPE-253)"
+    pdh_filter: "ATTR_GROUP_ID = 1181"
+    pdh_grain:  item-level, multi-row, sorted by contentId
+
+  owningSubsidiaryCountryCode:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR3, pdh_filter: "ATTR_GROUP_ID = 1403" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR3, pdh_filter: "ATTR_GROUP_ID = 1162" }
+
+  owningSubsidiaryName:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2, pdh_filter: "ATTR_GROUP_ID = 1403" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2, pdh_filter: "ATTR_GROUP_ID = 1162" }
+
+  ipOwnerCategory:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1403" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1162" }
+
+  copyrightYear:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: N_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1408" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: N_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 821" }
+
+  isbn13:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR4, pdh_filter: "ATTR_GROUP_ID = 1401" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR8, pdh_filter: "ATTR_GROUP_ID = 741" }
+
+  isbn10:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1418" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR6, pdh_filter: "ATTR_GROUP_ID = 741" }
+
+  parentProductId:
+    # MULTI-HOP on the ELSE branch (UIFPE-153 pattern; program's parentProduct
+    # precedent): 1164.C_EXT_ATTR2 is the parent's ISBN-13, resolved to the
+    # parent's PPID in the SQL via an isbn13→ppid index over ALL products
+    # (min(ppid) for determinism). The digital branch carries the PPID direct.
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR9, pdh_filter: "ATTR_GROUP_ID = 1401" }
+      - { when: "ELSE",            pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: "C_EXT_ATTR2 (parent ISBN-13 → PPID)", pdh_filter: "ATTR_GROUP_ID = 1164" }
+
+  editionNumber:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: N_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: N_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 820" }
+
+  productClassificationLevel1:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR6, pdh_filter: "ATTR_GROUP_ID = 820" }
+
+  productClassificationLevel2:
+    # Business-confirmed 2026-07-22: source SQL aliased the digital branch as
+    # LEVEL1 by copy-paste error; C_EXT_ATTR4 is level 2.
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR4, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR7, pdh_filter: "ATTR_GROUP_ID = 820" }
+
+  deliveryMethod:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR10, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR6,  pdh_filter: "ATTR_GROUP_ID = 821" }
+
+  brand:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR5, pdh_filter: "ATTR_GROUP_ID = 820" }
+
+  subBrand:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR5, pdh_filter: "ATTR_GROUP_ID = 1381" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR8, pdh_filter: "ATTR_GROUP_ID = 820" }
+
+  digitalPlatform:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR25, pdh_filter: "ATTR_GROUP_ID = 1418" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR13, pdh_filter: "ATTR_GROUP_ID = 821" }
+
+  finalTextPageCount:
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: N_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1406" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: N_EXT_ATTR5, pdh_filter: "ATTR_GROUP_ID = 818" }
+
+  fulfillmentOrgDetails:
+    # OBJECT (struct) — org-level fulfillment fields, one per (item, org) row.
+    # On the digital side, titleStatusCode + regionalPublicationDate are
+    # master-level and proliferate by org group. UK group = the org dimension's
+    # ORGANIZATION_CODE starting '01' (MTL_PARAMETERS, see the `org_params`
+    # source), not a hard-coded id list.
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "sellingRestrictionCode / 10002",             pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2,  pdh_filter: "ATTR_GROUP_ID = 1414", pdh_grain: org-level }
+      - { when: "sellingRestrictionCode / ELSE",              pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR12, pdh_filter: "ATTR_GROUP_ID = 800",  pdh_grain: org-level }
+      - { when: "discountCode / 10002",                       pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1411", pdh_grain: org-level }
+      - { when: "discountCode / ELSE",                        pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR4,  pdh_filter: "ATTR_GROUP_ID = 1173", pdh_grain: org-level }
+      - { when: "titleStatusCode / 10002 non-UK orgs",        pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1408", pdh_grain: "master-level, proliferates to orgs whose ORGANIZATION_CODE does NOT start '01'" }
+      - { when: "titleStatusCode / 10002 UK orgs",            pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1417", pdh_grain: "master-level, proliferates to orgs whose ORGANIZATION_CODE starts '01'" }
+      - { when: "titleStatusCode / ELSE",                     pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1171", pdh_grain: org-level }
+      - { when: "regionalPublicationDate / 10002 non-UK orgs", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: D_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1408", pdh_grain: "master-level, proliferates to orgs whose ORGANIZATION_CODE does NOT start '01'" }
+      - { when: "regionalPublicationDate / 10002 UK orgs",    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: D_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1417", pdh_grain: "master-level, proliferates to orgs whose ORGANIZATION_CODE starts '01'" }
+      - { when: "regionalPublicationDate / ELSE",             pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: D_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1173", pdh_grain: org-level }
+      - { when: "returnClass (scalar — not conditional)",    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR8,  pdh_filter: "ATTR_GROUP_ID = 822",  pdh_grain: org-level }
+      - { when: "boFlag (scalar — not conditional)",         pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR2,  pdh_filter: "ATTR_GROUP_ID = 1171 AND ITEM_CATALOG_GROUP_ID <> 10002", pdh_grain: org-level }
+      - { when: "defaultSoSourceType (scalar — driving table, no join)", pdh_table: MTL_SYSTEM_ITEMS_B, pdh_column: DEFAULT_SO_SOURCE_TYPE, pdh_grain: org-level }
+      - { when: "imprint / 10002",                            pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR4,  pdh_filter: "ATTR_GROUP_ID = 1403", pdh_grain: org-level }
+      - { when: "imprint / ELSE",                             pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR14, pdh_filter: "ATTR_GROUP_ID = 800",  pdh_grain: org-level }
+      - { when: "productTaxClassification / 10002",           pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR4,  pdh_filter: "ATTR_GROUP_ID = 1411", pdh_grain: org-level }
+      - { when: "productTaxClassification / ELSE",            pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1170", pdh_grain: "org-level (asserted from the sibling pattern — new group, verify on first load)" }
+      - { when: "relevanceValue / 10002",                     pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR1,  pdh_filter: "ATTR_GROUP_ID = 1413", pdh_grain: "org-level (asserted from the sibling pattern — new group, verify on first load)" }
+      - { when: "relevanceValue / ELSE",                      pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: C_EXT_ATTR10, pdh_filter: "ATTR_GROUP_ID = 800",  pdh_grain: org-level }
+      # ARRAY inside the struct (UIFPE-270): several initiatives per (item, org)
+      # — up to 4 in dev — sorted by (marketingInitiative, startDate). Not
+      # conditional: both catalog sides use group 1141.
+      - { when: "marketingInitiative[] (scalar — not conditional)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: "C_EXT_ATTR1 (marketingInitiative), D_EXT_ATTR1 (startDate), D_EXT_ATTR2 (endDate)", pdh_filter: "ATTR_GROUP_ID = 1141", pdh_grain: "org-level, multi-row" }
+      - { when: "readyForManufactureCode (scalar — not conditional)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: "C_EXT_ATTR1", pdh_filter: "ATTR_GROUP_ID = 1174", pdh_grain: "full entity key (INVENTORY_ITEM_ID, ORGANIZATION_ID)" }
+
+  contributors:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: "C_EXT_ATTR1..C_EXT_ATTR16 (multi-row)"
+    pdh_filter: "ATTR_GROUP_ID = 798"
+    pdh_grain:  item-level, one row per contributor, sorted by rank (C_EXT_ATTR10 as int)
+
+  webConsumingSystem:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    # C_EXT_ATTR1, not C_EXT_ATTR11 — corrected 2026-08-06, confirmed by the
+    # mapping owner as a transcription typo. Proven by the first Gold load:
+    # group 1121 holds 2,138,095 rows over 882,299 items, C_EXT_ATTR11 is NULL
+    # in all of them (as are ATTR2-ATTR20), and C_EXT_ATTR1 carries the values
+    # (WEB_IPM, WEB_CA_Oasis, WEB_US_OneCRM, ...). Do not "fix" this back by
+    # copying from the intake workbook, which still carries the typo.
+    # 2026-09-07 (UIFPE-270, owner item 10): a struct array — the end date
+    # (ECI_RELEASE_DATE, D_EXT_ATTR1) rides with each system name.
+    pdh_column: "C_EXT_ATTR1 (wcsName), D_EXT_ATTR1 (endDate)"
+    pdh_filter: "ATTR_GROUP_ID = 1121"
+    pdh_grain:  item-level, multi-row, sorted by (wcsName, endDate)
+
+  associatedPrograms:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR1
+    pdh_filter: "ATTR_GROUP_ID = 1421"
+    pdh_grain:  item-level, multi-row value list
+
+  # ── BOM component structures (2026-08-17, POPULATED 2026-09-07 — UIFPE-269) ──
+  # The bom_* Silver tables landed and are registered below (bom_bills keyed on
+  # the assembly item; components, UDA rows and structure types lookup_only —
+  # they carry no product key, so a component-only edit lands via the daily
+  # schedule.recompute on these two columns, the price precedent). Bills are
+  # read from the MASTER org (99.99% of bills in dev) and primary structures
+  # only (ALTERNATE_BOM_DESIGNATOR IS NULL). EGO_ATTR_GROUPS_V is not in
+  # Silver, so the UDA groups are pinned by id: 1184 = PSON_PACK_COMPONENTS,
+  # 1185 = PSON_CUSTOM_COMPONENTS (asserted by a test).
+  standardComponents:
+    pdh_table:  "BOM_COMPONENTS_B + BOM_BILL_OF_MATERIALS (structure 1042 'Pearson Standard', master org, primary bill) + BOM_STRUCTURE_TYPES_B + BOM_COMPONENTS_EXT_B (ATTR_GROUP_ID = 1184 PSON_PACK_COMPONENTS) + MTL_SYSTEM_ITEMS_B (component SEGMENT1 via items_all)"
+    pdh_column: "ITEM_NUM (sequenceNumber), COMPONENT_QUANTITY, EFFECTIVITY_DATE, DISABLE_DATE; UDA N_EXT_ATTR1 (finalPageCount), C_EXT_ATTR1 (discountType), N_EXT_ATTR3 (discountValue)"
+    pdh_grain:  "item-level via ASSEMBLY_ITEM_ID, one row per component, sorted by sequenceNumber (ITEM_NUM) then ppid"
+
+  customComponents:
+    pdh_table:  "BOM_COMPONENTS_B + BOM_BILL_OF_MATERIALS (structure 2041 'PEARSON_CUSTOM', master org, primary bill) + BOM_STRUCTURE_TYPES_B + BOM_COMPONENTS_EXT_B (ATTR_GROUP_ID = 1185 PSON_CUSTOM_COMPONENTS) + MTL_SYSTEM_ITEMS_B (component SEGMENT1 via items_all)"
+    pdh_column: "DISABLE_DATE; UDA N_EXT_ATTR1 (originalWorkPercent), N_EXT_ATTR2 (customWorkPercent), D_EXT_ATTR1 (effectiveDate), N_EXT_ATTR3 (finalPageCount), N_EXT_ATTR4 (overridePercentage)"
+    pdh_grain:  "item-level via ASSEMBLY_ITEM_ID, one row per component, sorted by ppid then effectiveDate (no sequence column)"
+  categories:
+    # ARRAY — the only column sourced outside MTL_SYSTEM_ITEMS_B /
+    # EGO_MTL_SY_ITEMS_EXT_B / MTL_PARAMETERS. Four tables:
+    #   MTL_ITEM_CATEGORIES        the assignment (which categories this item has)
+    #   MTL_CATEGORY_SETS          the set name — "EPT", "POA", "Private Pay (POA)"
+    #   MTL_CATEGORIES_B           SEGMENT1 = the business code (-> categoryCode)
+    #   MTL_CATEGORIES_TL          DESCRIPTION, LANGUAGE = 'US' (-> categoryName)
+    #   MTL_CATEGORY_SET_VALID_CATS PARENT_CATEGORY_ID -> the hierarchy chain
+    # The business extract aliases MTL_CATEGORIES_B.SEGMENT1 as "CATEGORY_ID" in
+    # the same SELECT as the real CATEGORY_ID. Gold splits them: categoryCode
+    # (SEGMENT1, business) vs categoryId (surrogate). Never one name for both.
+    pdh_table:  "MTL_ITEM_CATEGORIES + MTL_CATEGORY_SETS + MTL_CATEGORIES_B + MTL_CATEGORIES_TL + MTL_CATEGORY_SET_VALID_CATS"
+    pdh_column: "CATEGORY_SET_NAME (categorySetName), SEGMENT1 (categoryCode), DESCRIPTION (categoryName), PARENT_CATEGORY_ID chain (hierarchy), CATEGORY_ID (categoryId), ATTRIBUTE8 (isIncludeInECatalog), DISABLE_DATE (disableDate)"
+    pdh_filter: "CATEGORY_SET_NAME IN ('EPT','POA','Private Pay (POA)') AND MTL_CATEGORIES_TL.LANGUAGE = 'US' AND assignment read from the master org only"
+    pdh_grain:  >-
+      item-level, multi-row. Assignments are read from the MASTER org
+      (ORGANIZATION_ID = MASTER_ORGANIZATION_ID, 82 in dev) and apply to every
+      org row for that item — so this behaves like contributors, not like the
+      org-level fulfillment attributes. Sorted by (categorySetName, categoryId).
+
+  # ── 2026-09-07 batch (UIFPE-270) — appended columns ─────────────────────
+  enablingTechnology:
+    # ARRAY<STRUCT<level1, level2>>, item-level, conditional by catalog side:
+    # several pairs per item (digital items average 3, up to 11), sorted by
+    # (level1, level2), duplicates collapsed. Rows whose both values are NULL
+    # after the null-sentinel rule ('N/A / N/A', 'TBD / TBD') are dropped.
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: "C_EXT_ATTR1 (level1), C_EXT_ATTR2 (level2)", pdh_filter: "ATTR_GROUP_ID = 1407", pdh_grain: "item-level, multi-row" }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_B, pdh_column: "C_EXT_ATTR1 (level1), C_EXT_ATTR2 (level2)", pdh_filter: "ATTR_GROUP_ID = 881",  pdh_grain: "item-level, multi-row" }
+
+  productUrl:
+    # PRODUCT_URL lives in the TRANSLATIONS table (TL_EXT_ATTR1), US language
+    # only like longDescription — a new source alias, items_ext_tl.
+    discriminator: { pdh_table: EGO_MTL_SY_ITEMS_EXT_TL, pdh_column: ITEM_CATALOG_GROUP_ID }
+    conditional:
+      - { when: "10002 (Digital Catalog)", pdh_table: EGO_MTL_SY_ITEMS_EXT_TL, pdh_column: TL_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1406 AND LANGUAGE = 'US'", pdh_grain: item-level }
+      - { when: "ELSE",                    pdh_table: EGO_MTL_SY_ITEMS_EXT_TL, pdh_column: TL_EXT_ATTR1, pdh_filter: "ATTR_GROUP_ID = 1165 AND LANGUAGE = 'US'", pdh_grain: item-level }
+
+  instructorResourceFiles:
+    # ARRAY<STRUCT<9 fields>>, item-level, MULTI-ROW — one-to-many per product
+    # (owner-confirmed 2026-09-20). Instructor Resource Content: the
+    # downloadable assets an instructor gets with a product. "IRC" is expanded
+    # in the gold name deliberately; the acronym collides with Internet Relay
+    # Chat and a gold column is a consumer surface.
+    #
+    # TWO TABLES, joined per EAV ROW and not per item. Eight fields are C_/N_
+    # slots in the base table; fileDescription is a TL_EXT_ATTR slot, which
+    # lives in the translations table like productUrl. Every other TL read here
+    # is single-row so it can use max() + GROUP BY item — this one CANNOT, or
+    # every file in the array would carry the same description. EXTENSION_ID is
+    # the EAV row key both tables hold, so that is the join.
+    pdh_table:  "EGO_MTL_SY_ITEMS_EXT_B + EGO_MTL_SY_ITEMS_EXT_TL joined on EXTENSION_ID (ATTR_GROUP_ID = 754 PSO_FILE_PROPERTIES)"
+    pdh_column: "C_EXT_ATTR1 (fileName), C_EXT_ATTR2 (fileExtensionCode), C_EXT_ATTR3 (fileSize), C_EXT_ATTR4 (linkText), C_EXT_ATTR5 (fileUrl), C_EXT_ATTR6 (mediaFileType), C_EXT_ATTR7 (mediaStatus), N_EXT_ATTR1 (fileRankSequence); TL_EXT_ATTR1 (fileDescription)"
+    pdh_filter: "ATTR_GROUP_ID = 754 on both sides AND LANGUAGE = 'US' on the translations side"
+    pdh_grain:  >-
+      item-level via INVENTORY_ITEM_ID, multi-row, fanning out to every org row
+      for that item — the same shape as webConsumingSystem, not the org-level
+      fulfillment attributes. fileSize is carried verbatim as text: the source
+      column is character-typed and the unit is not guaranteed.
+
+# ── Physical layer ──────────────────────────────────────────────────────────
+# Where PDH data currently lives in our lake. Consumed by the Glue transform
+# and reconcile jobs.
+
+  itemCatalogGroupId:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: ITEM_CATALOG_GROUP_ID
+    pdh_grain:  driving table (row grain)
+
+  sourceItemNumber:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR17
+    pdh_filter: "ATTR_GROUP_ID = 741"
+    pdh_grain:  conditional (2 branches — see the intake mapping)
+
+schema:
+  master: ../../../gold/product/v1/master.json
+
+sql:
+  file: sql/product.sql
+
+# Config-supplied {token} values this SQL cannot run without — the transform
+# refuses loudly when the pipeline config's sql_vars lacks one (UIFPE-253:
+# the content-service URL base differs per environment).
+required_sql_vars:
+  - content_url_base
+
+sources:
+  - alias: items
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+    is_source_of_truth: true        # used by reconcile for orphan detection
+    sot_pk_mapping:                 # gold PK col -> Spark SQL expression against this Silver table
+      inventoryItemId: "INVENTORY_ITEM_ID"
+      organizationId:            "ORGANIZATION_ID"
+    # Domain filter — MUST match the WHERE at the end of sql/product.sql
+    # (business decision 2026-08-06: products only; SEGMENT1 'P%' = programs,
+    # UIFPE-62; owner decision 2026-09-07, UIFPE-271: DRAFT / ERROR / DELETE /
+    # RETIRED items reach no channel). Reconcile appends this to its SoT PK
+    # projection. It is what DELETES a row that leaves the domain (A -> P, or a
+    # status moving into the excluded set): the transform only upserts, so
+    # without this filter here the reconcile anti-join would still find the
+    # item in the unfiltered SoT and the stale Gold row would never be removed.
+    sot_filter: "SEGMENT1 LIKE 'A%' AND INVENTORY_ITEM_STATUS_CODE NOT IN ('DRAFT', 'ERROR', 'DELETE', 'RETIRED', 'TEMPLATE')"
+    key_mapping:                    # ADR-0003 D1: changed row -> affected Gold key(s)
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+      organizationId:            "CAST(ORGANIZATION_ID AS BIGINT)"
+
+  - alias: items_ext
+    silver_table: uif_echo_{env}_silver_mdm.ego_mtl_sy_items_ext_b
+    watermark_col: _silver_updated_at
+    key_mapping:                    # item-level source: binds a PK SUBSET ->
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"  # fans out to all orgs (D1)
+
+  - alias: items_tl
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_tl
+    watermark_col: _silver_updated_at
+    key_mapping:                    # org-level translations table
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+      organizationId:  "CAST(ORGANIZATION_ID AS BIGINT)"
+
+  # Attribute-group TRANSLATIONS (UIFPE-270): the TL_EXT_ATTR* slots — url's
+  # PRODUCT_URL (groups 1165 / 1406). Item-level like items_ext: the groups
+  # read from it are master-level, so the item half of the PK fans out.
+  - alias: items_ext_tl
+    silver_table: uif_echo_{env}_silver_mdm.ego_mtl_sy_items_ext_tl
+    watermark_col: _silver_updated_at
+    key_mapping:
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+
+  - alias: org_params
+    silver_table: uif_echo_{env}_silver_mdm.mtl_parameters
+    watermark_col: _silver_updated_at
+    # Org DIMENSION, not an item source: it has no INVENTORY_ITEM_ID, so the
+    # only honest key_mapping is the org half of the PK. That binds the widest
+    # possible PK subset — one changed org row fans out to EVERY Gold row for
+    # that org, up to 1.6M rows for org 82 (dev, 2026-08-06) against ~6.9M
+    # total. It is also correct: organizationCode sits on every row, so an org
+    # rename really does invalidate all of them. Do NOT narrow it to dodge the
+    # cost; a narrower mapping would silently serve stale codes.
+    #
+    # Cost control, in the order it applies:
+    #   1. The canonical hash gate (ADR-0003 D3) drops unchanged rebuilt rows
+    #      with no write, no change-log row and no _gold_updated_at bump — so
+    #      the usual cost of a spurious fan-out is scan + rebuild, not churn.
+    #   2. glue.max_affected_fraction (0.5) logs a WARN when a run rebuilds
+    #      more than half the table. Expect that WARN on any org change; it is
+    #      a print, not a stop.
+    # Known amplifier: `_silver_updated_at` is uniform across all 62 rows in
+    # dev (single value, 2026-08-05T09:04:40Z), i.e. Silver stamps the whole
+    # snapshot per ingest. So a re-ingest that changes nothing still presents
+    # 62 changed rows and triggers a full-table rebuild. `last_update_date`
+    # carries real per-row Oracle change times (62 distinct, 2017→2025) and
+    # would suppress that, but it would also miss a Silver-side correction that
+    # left the Oracle date untouched. Kept on _silver_updated_at for that
+    # reason — revisit if the rebuild cost bites before the org table is
+    # ingested incrementally.
+    key_mapping:
+      organizationId: "CAST(ORGANIZATION_ID AS BIGINT)"
+
+  # Second alias over the driving table, registered FULL (program's items_all
+  # lesson): Phase 2 replaces the `items` temp view with only the affected
+  # entities, so any lookup that must see OTHER products' rows — here the
+  # isbn13→ppid index that resolves parentProduct's ELSE branch — needs its
+  # own unrestricted view. Declared in BOTH this manifest and the pipeline
+  # config, always. Same key_mapping as `items`: a change here is a change
+  # there (same physical table); the detection union is idempotent.
+  - alias: items_all
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+    key_mapping:
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+      organizationId: "CAST(ORGANIZATION_ID AS BIGINT)"
+  # ── category sources (registered 2026-08-31) ────────────────────────────
+  - alias: item_categories
+    silver_table: uif_echo_{env}_silver_mdm.mtl_item_categories
+    watermark_col: _silver_updated_at
+    # inventoryItemId ONLY, deliberately — NOT the full PK, even though this
+    # table has both columns. Categories are read from the master org and
+    # applied to every org row, so a changed master-org assignment invalidates
+    # ALL ~62 org rows for that item. Binding both PK columns would rebuild
+    # only the org-82 row and leave the other 61 serving the old category list
+    # forever — the failure mode is silent and permanent, which is exactly what
+    # D1's subset-fan-out semantics exist to prevent. This is the same shape as
+    # items_ext.
+    key_mapping:
+      inventoryItemId: "CAST(INVENTORY_ITEM_ID AS BIGINT)"
+
+  # The four below are LOOKUP_ONLY: taxonomy dimensions with no
+  # INVENTORY_ITEM_ID and no ORGANIZATION_ID, so no expression over a changed
+  # row can name the Gold rows it affects. They are registered as FULL temp
+  # views for the mapping SQL and skipped by Phase 1 (see validate_key_mappings
+  # in gold_cdc.py for the full contract).
+  #
+  # Accepted consequence: renaming a category or a set does NOT trigger a
+  # rebuild. The label denormalized onto ~6.9M product rows moves on the next
+  # recompute-leg pass over `categories`. Adding, moving or removing an item's
+  # category assignment IS fully incremental — that change lands in
+  # item_categories above, which is keyed. Only relabelling is deferred.
+  #
+  # Do NOT "fix" this by inventing a key_mapping for them. The tempting hack —
+  # {organizationId: "CAST(NULL AS BIGINT)"} — passes validation, advances the
+  # watermark and detects nothing; validate_key_mappings now refuses the
+  # lookup_only + key_mapping combination for that reason.
+  - alias: category_sets
+    silver_table: uif_echo_{env}_silver_mdm.mtl_category_sets
+    watermark_col: _silver_updated_at
+    lookup_only: true
+
+  - alias: category_valid_cats
+    silver_table: uif_echo_{env}_silver_mdm.mtl_category_set_valid_cats
+    watermark_col: _silver_updated_at
+    lookup_only: true
+
+  - alias: categories_b
+    silver_table: uif_echo_{env}_silver_mdm.mtl_categories_b
+    watermark_col: _silver_updated_at
+    lookup_only: true
+
+  - alias: categories_tl
+    silver_table: uif_echo_{env}_silver_mdm.mtl_categories_tl
+    watermark_col: _silver_updated_at
+    lookup_only: true
+
+  # ── BOM sources (registered 2026-09-07, UIFPE-269) ──────────────────────
+  # The bill HEADER carries the product key (ASSEMBLY_ITEM_ID), so adding or
+  # removing a bill is change-detected. Components, their UDA rows and the
+  # structure-type dimension carry no product key: lookup_only, and a
+  # component-only edit lands through schedule.recompute on
+  # standardComponents / customComponents in the pipeline config.
+  - alias: bom_bills
+    silver_table: uif_echo_{env}_silver_mdm.bom_bill_of_materials
+    watermark_col: _silver_updated_at
+    key_mapping:
+      inventoryItemId: "CAST(ASSEMBLY_ITEM_ID AS BIGINT)"
+
+  - alias: bom_components
+    silver_table: uif_echo_{env}_silver_mdm.bom_components_b
+    watermark_col: _silver_updated_at
+    lookup_only: true
+
+  - alias: bom_components_ext
+    silver_table: uif_echo_{env}_silver_mdm.bom_components_ext_b
+    watermark_col: _silver_updated_at
+    lookup_only: true
+
+  - alias: bom_structure_types
+    silver_table: uif_echo_{env}_silver_mdm.bom_structure_types_b
+    watermark_col: _silver_updated_at
+    lookup_only: true
+
+target:
+  database: uif_echo_{env}_gold_product
+  table: product
+  primary_key_cols:
+    - inventoryItemId
+    - organizationId
+
+# Oracle's placeholder values become NULL on every Silver view the SQL reads
+# (UIFPE-268; owner decision 2026-09-07 reversing the 2026-08-06 pass-through).
+# Key / discriminator / watermark columns are protected by the runtime; nothing
+# in product.sql tests for these values any more. Changing this set moves the
+# canonical hash on most rows — plan a --rebuild.
+null_sentinels:
+  string: ["TBD", "N/A"]
+  numeric: [99998, 99999]
+  # An alternate-bill designator is a free-text user code: one literally
+  # coded TBD / N/A must not read as NULL and pass the primary-bill filter.
+  exclude_columns: ["bom_bills.ALTERNATE_BOM_DESIGNATOR"]
+
+# ADR-0003 D11: every ARRAY-typed master property declares its sort key here
+# (stable ordering => stable hashes).
+array_sort_keys:
+  # RANK is the source's own display order. array_sort already gives a TOTAL
+  # order without a tie-breaker — it compares the whole struct, payload
+  # included — so fileName is declared to STATE the intended order rather than
+  # inherit whichever payload field happens to differ first, which would shift
+  # silently if the payload's field order ever moved.
+  instructorResourceFiles: [fileRankSequence, fileName]
+  contributors: [contributorSortSequence]              # cast to INT in SQL for numeric ordering
+  webConsumingSystem: [wcsName, endDate]  # struct array since UIFPE-270 (was a value list)
+  associatedPrograms: [value]
+  # intake sort key (type) + audience/geoVisibility tie-breakers. Two entries sharing
+  # all three would still sort unstably (no further tie-breaker implemented — open risk).
+  marketingCopy: [marketingCopyTypeCode, audienceCode, geoVisibilityCode]
+  standardComponents: [sequenceNumber, componentProductId]  # ITEM_NUM — the BOM's own ordering; ppid tie-break
+  # ppid is the only natural identity (no sequence column); effectiveDate is
+  # the tie-breaker the 2026-08-17 intake reserved for duplicate ppids.
+  customComponents: [componentProductId, componentEffectiveDate]
+  # (level1, level2) is the whole element, so the sort is total; duplicates
+  # are collapsed in the SQL (collect_set).
+  enablingTechnology: [enablingTechnologyLevel1, enablingTechnologyLevel2]
+  # fulfillmentOrgDetails.marketingInitiative (an array INSIDE the struct) sorts
+  # by (marketingInitiative, startDate) in the SQL — D11 covers top-level
+  # arrays, so it is recorded here as a comment rather than an entry.
+  # Provably unique per Gold row: the assignment's own upstream key is
+  # (item, org, set, category), so with the org pinned to the master no two
+  # entries can share this pair. Unlike marketingCopy, no tie-break risk.
+  categories: [categorySetName, categoryId]
+
+# ADR-0003 D12: Spark types for complex (array/object/date) columns — used by
+# the auto-DDL when the maintenance diff adds them.
+column_types:
+  digitalEffectiveStartDate: DATE
+  marketingCopy: >-
+    ARRAY<STRUCT<contentId: STRING, marketingCopyText: STRING, marketingCopyTypeCode: STRING,
+    audienceCode: STRING, geoVisibilityCode: STRING, owningMarketCode: STRING,
+    contentUrl: STRING>>
+  # Field order matches the SQL named_struct and is LOAD-BEARING: Iceberg's
+  # nested ADD COLUMN appends and cannot position, and nested field order is
+  # hashed (top-level order is sorted, nested is not). So a NEW member goes
+  # LAST, however odd that reads — boFlag / defaultSoSourceType sit after the
+  # marketingInitiative array for exactly that reason (UIFPE-354).
+  fulfillmentOrgDetails: >-
+    STRUCT<sellingRestrictionCode: STRING, discountCode: STRING,
+    titleStatusCode: STRING, regionalPublicationDate: DATE,
+    returnClassCode: STRING, imprintName: STRING,
+    productTaxClassificationCode: STRING, relevanceValue: STRING,
+    marketingInitiative: ARRAY<STRUCT<marketingInitiativeName: STRING,
+    marketingInitiativeStartDate: DATE, marketingInitiativeEndDate: DATE>>,
+    backOrderIndicator: BOOLEAN, defaultSalesOrderSourceTypeCode: STRING, readyForManufactureCode: STRING>
+  enablingTechnology: >-
+    ARRAY<STRUCT<enablingTechnologyLevel1: STRING, enablingTechnologyLevel2: STRING>>
+  # UIFPE-476. Field order matches the SQL named_struct and master.json's
+  # property order, per the note above: nested field order is hashed, so the
+  # three must not drift. fileSize is STRING deliberately - the source
+  # column is character-typed and carries no guaranteed unit.
+  instructorResourceFiles: >-
+    ARRAY<STRUCT<fileName: STRING, fileExtensionCode: STRING, fileSize: STRING,
+    linkText: STRING, fileUrl: STRING, mediaFileType: STRING,
+    mediaStatus: STRING, fileRankSequence: INT, fileDescription: STRING>>
+  standardComponents: >-
+    ARRAY<STRUCT<componentProductId: STRING, sequenceNumber: INT,
+    componentQuantity: DECIMAL(38,2), componentEffectiveDate: DATE,
+    componentFinalPageCount: INT, discountType: STRING,
+    discountAmount: DECIMAL(38,2), componentDisabledDate: DATE>>
+  customComponents: >-
+    ARRAY<STRUCT<componentProductId: STRING, originalWorkPercent: DECIMAL(38,2),
+    customWorkPercent: DECIMAL(38,2), componentEffectiveDate: DATE,
+    componentFinalPageCount: INT, overridePercent: DECIMAL(38,2),
+    componentDisabledDate: DATE>>
+  contributors: >-
+    ARRAY<STRUCT<contributorId: STRING, contributionRoleCode: STRING, contributorSortSequence: INT,
+    contributorPreNominalTitle: STRING, contributorGivenName: STRING, contributorAdditionalName: STRING,
+    contributorFamilyName: STRING, contributorPostNominalTitle: STRING,
+    affiliationType1: STRING, affiliation1: STRING,
+    affiliationType2: STRING, affiliation2: STRING,
+    affiliationType3: STRING, affiliation3: STRING>>
+  webConsumingSystem: >-
+    ARRAY<STRUCT<wcsName: STRING, endDate: DATE>>
+  associatedPrograms: ARRAY<STRING>
+  # Field ORDER here must match the mapping SQL's named_struct, or a column
+  # added by the maintenance diff disagrees with the same column created by a
+  # rebuild's CTAS — the same trap the four DECIMAL entries below document.
+  categories: >-
+    ARRAY<STRUCT<categorySetName: STRING, categoryCode: STRING,
+    categoryName: STRING, categoryHierarchyPath: STRING, categoryId: BIGINT,
+    ecatalogIncludeIndicator: BOOLEAN, categoryDisabledDate: DATE>>
+  # Declared explicitly so the auto-DDL agrees with the mapping SQL's CTAS.
+  # Without these, json_type_to_spark maps JSON "number" to its DECIMAL(38,10)
+  # default and a column added by the maintenance diff would disagree in scale
+  # with the same column created by a rebuild. Scale 2 per the 2026-08-06
+  # business decision (see the mapping SQL for the evidence behind it).
+  unitWeightQuantity: DECIMAL(38,2)
+  unitLengthQuantity: DECIMAL(38,2)
+  unitWidthQuantity:  DECIMAL(38,2)
+  unitHeightQuantity: DECIMAL(38,2)
+
+# Sheet-aligned column order (also the physical column order on rebuild).
+output_columns:
+  # Business-specified physical order (2026-08-06) — identifiers, ISBNs and
+  # descriptions first, then commercial, taxonomy, physical, fulfillment,
+  # media, and collections. Replaces the sheet-aligned order. Must match
+  # master.json property order and the mapping SQL SELECT order (pinned by
+  # tests); the three metadata columns are appended by the runtime after
+  # these.
+  - inventoryItemId
+  - organizationId
+  - itemCatalogGroupId
+  - productId
+  - isbn13
+  - isbn10
+  - sourceItemNumber
+  - parentProductId
+  - organizationCode
+  - description
+  - longDescription
+  - inventoryItemStatus
+  - itemType
+  - lineOfBusiness
+  - ipOwnerCategory
+  - copyrightYear
+  - editionNumber
+  - owningSubsidiaryCountryCode
+  - owningSubsidiaryName
+  - deliveryMethod
+  - brand
+  - subBrand
+  - digitalPlatform
+  - disciplineLevel1
+  - disciplineLevel2
+  - disciplineLevel3
+  - disciplineLevel4
+  - productClassificationLevel1
+  - productClassificationLevel2
+  - languageLevel1
+  - languageLevel2
+  - learnerStageLevel1
+  - learnerStageLevel2
+  - nonDisclosureAgreementIndicator
+  - digitalEffectiveStartDate
+  - digitalVersionNumber
+  - unitWeightQuantity
+  - weightUomCode
+  - unitLengthQuantity
+  - unitWidthQuantity
+  - unitHeightQuantity
+  - dimensionUomCode
+  - qualificationLevelName
+  - finalTextPageCount
+  - fulfillmentOrgDetails
+  - accessDurationType
+  - accessDurationQuantity
+  - accessDurationUnitCode
+  # Inserted 2026-09-07 (UIFPE-270) at the owner's request ("next to
+  # accessDurationUnit") — the one exception to append-only; the batch ships with a
+  # --rebuild anyway, which is what a physical reorder costs.
+  - courseDurationQuantity
+  - courseDurationUnitCode
+  - coverImageLargeUrl
+  - coverImageRegularUrl
+  - coverImageHighResolutionUrl
+  - contributors
+  - webConsumingSystem
+  - associatedPrograms
+  - marketingCopy
+  - standardComponents
+  - customComponents
+  # Appended (2026-08-31), not inserted with the other taxonomy columns:
+  # output_columns IS the physical column order on rebuild and must track
+  # master.json property order exactly, so appending keeps the existing 50
+  # columns where they are.
+  - categories
+  # Appended 2026-09-07 (UIFPE-270).
+  - enablingTechnology
+  - productUrl
+  - instructorResourceFiles

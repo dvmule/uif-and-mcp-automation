@@ -1,0 +1,91 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Node / built UI assets (data-exchange control-panel UI)
+node_modules/
+domains/data-exchange/ui/dist/
+
+# IDE
+.idea/
+
+# Terraform working files. Note .terraform.lock.hcl is deliberately NOT ignored —
+# it pins provider versions and belongs in version control.
+.terraform/
+# qe/ci.sh inits into its own data dir so a recorded S3 backend cannot make
+# the credential-free validate gate reach for credentials.
+.terraform-ci/
+*.tfplan
+# `*.tfplan` alone did not cover `tf.plan`, which is the exact name
+# .github/workflows/deploy-apicurio-dev.yml (and the DEPLOY-DEV.md runbook)
+# writes with `terraform plan -out=tf.plan` -- so the one filename this repo
+# actually produces was the one not ignored, in all 16 terraform directories.
+#
+# A saved plan is not an innocuous build artifact. It contains every value the
+# plan resolved, generated passwords included, and `grep` over it finds nothing
+# because the file is compressed -- which is exactly why it reads as safe. The
+# JSON rendering (`terraform show -json`) prints the same values in clear, so
+# that is ignored too rather than left to a habit of deleting it afterwards.
+tf.plan
+*.plan
+plan.json
+*.plan.json
+# Lambda zips built by archive_file at plan time.
+.build/
+
+# Node / Vite (domain UIs). package-lock.json is deliberately NOT ignored —
+# it pins dependency versions and belongs in version control.
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Editor
+.vscode/
+
+# macOS Finder metadata. Never belongs in a repo — it appears in any directory
+# a Finder window has visited, including every domain's schema folders.
+.DS_Store
+
+# Office lock files. Excel writes ~$<name>.xlsx alongside an open workbook, so
+# authoring a gold-attribute-mapping template leaves one behind.
+~$*
+
+# Playwright MCP session artifacts (browser profile, traces).
+.playwright-mcp/
+
+# Playwright run artifacts (ui/test-results/, ui/playwright-report/). Written by
+# every local `npx playwright test` run and by the e2e suite; nothing reads them
+# back, and .last-run.json in particular changes on every run.
+test-results/
+playwright-report/
+
+# Superpowers SDD scratch (ledger, briefs, review packages).
+.superpowers/
+
+# Claude Code local state and native worktrees.
+.claude/worktrees/
+.claude/settings.local.json
+
+# Reference workbooks dropped at the repository root. The programme plan arrives
+# as a spreadsheet for reconciliation (see PMdiscrepancies.md), but the plan of
+# record is PLANNING.md — a binary at the root is neither reviewable in a diff
+# nor the source of truth, and one was committed by accident on 2026-09-10.
+# Scoped to the root so a domain that genuinely needs a workbook is unaffected.
+/*.xlsx
+
+# Python build metadata from an editable install (uv sync / pip install -e).
+*.egg-info/
+
+# Generated per build by stacks/echo/scripts/stage-artifacts.sh: the content
+# hashes of one release's artifacts, loaded automatically by terraform plan and
+# apply. Never committed — it describes a single build, and a stale copy would
+# silently pin an apply to artifacts from an earlier one (UIFPE-515).
+stacks/echo/infrastructure/terraform/artifacts.auto.tfvars.json
+
+# MCP automation: generated bundles/projections/metadata are transient build artifacts, never committed
+build/mcp/
+
+# Local Python virtual environments and linter caches (any folder; never committed)
+.venv*/
+.ruff_cache/

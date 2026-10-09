@@ -1,0 +1,123 @@
+{
+  "AWS_INCREMENTAL_SILVER": {
+    "id": "fipm-x-daily",
+    "config": {
+      "pipeline_id": "fipm-x-daily",
+      "version": "latest",
+      "enabled": true,
+      "source": {
+        "secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/oracle-fipm"
+      },
+      "extract": {
+        "table": "FIPM.X",
+        "mode": "incremental",
+        "watermark_col": "LAST_UPDATE_DATE",
+        "watermark_fallback_col": "CREATION_DATE",
+        "watermark_value": "1970-01-01T00:00:00",
+        "jdbc_partition_col": "ORGANIZATION_ID",
+        "jdbc_lower_bound": 1,
+        "jdbc_upper_bound": 9000,
+        "jdbc_partitions": 8
+      },
+      "target": {
+        "s3_path": "s3://echo-dev-bronze/data/fipm/x/",
+        "compression": "snappy"
+      },
+      "quality": {
+        "not_null_cols": [
+          "INVENTORY_ITEM_ID",
+          "ORGANIZATION_ID"
+        ],
+        "min_rows_expected": 1155
+      },
+      "glue": {
+        "worker_type": "G.2X",
+        "num_workers": 5,
+        "timeout_minutes": 120
+      },
+      "schedule": {
+        "frequency": "daily"
+      },
+      "silver": {
+        "enabled": true,
+        "database": "echo_dev_silver_fipm",
+        "table": "X",
+        "s3_path": "s3://echo-dev-silver/data/fipm/x/",
+        "primary_key_cols": [
+          "INVENTORY_ITEM_ID",
+          "ORGANIZATION_ID"
+        ],
+        "soft_delete": {
+          "flag_col": "ACTIVE_FLAG",
+          "inactive_val": "N"
+        }
+      },
+      "replication": {
+        "gcs": {
+          "enabled": true,
+          "bucket": "echo-dev-bronze",
+          "prefix": "bronze/fipm/x/",
+          "credentials_secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/gcp-sa"
+        },
+        "silver_bq": {
+          "enabled": true,
+          "bucket": "echo-dev-silver",
+          "prefix": "silver/fipm/x/",
+          "credentials_secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/gcp-sa",
+          "bq_project": "informatica-etl-nonprd",
+          "bq_dataset": "echo_dev_silver_fipm",
+          "bq_location": "EU"
+        }
+      }
+    }
+  },
+  "GCP_FULL_NO_SILVER": {
+    "id": "fipm-x-weekly",
+    "config": {
+      "pipeline_id": "fipm-x-weekly",
+      "version": "latest",
+      "enabled": true,
+      "destination": {
+        "cloud": "gcp",
+        "gcp_credentials_secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/gcp-sa"
+      },
+      "source": {
+        "secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/oracle-eds"
+      },
+      "extract": {
+        "table": "FIPM.X",
+        "mode": "full",
+        "watermark_col": null,
+        "watermark_fallback_col": null,
+        "watermark_value": "1970-01-01T00:00:00",
+        "jdbc_partition_col": null,
+        "jdbc_lower_bound": null,
+        "jdbc_upper_bound": null,
+        "jdbc_partitions": null
+      },
+      "target": {
+        "gcs_path": "gs://echo-dev-bronze/fipm/x/",
+        "compression": "snappy"
+      },
+      "quality": {
+        "not_null_cols": [
+          "INVENTORY_ITEM_ID"
+        ],
+        "min_rows_expected": "__undefined__"
+      },
+      "glue": {
+        "worker_type": "G.1X",
+        "num_workers": 2,
+        "timeout_minutes": 120
+      },
+      "schedule": {
+        "frequency": "weekly"
+      },
+      "silver": "__undefined__"
+    }
+  },
+  "GCP_INVALID": {
+    "error": "Bronze GCS path must start with gs://; Silver GCS path is required; BigQuery project is required; BigQuery dataset is required",
+    "sent": 0
+  }
+}

@@ -1,0 +1,190 @@
+name: Jira transition
+
+# Phase 2 of the Git <-> Jira integration (see
+# capabilities/delivery/jira-github-integration.md). Enforces the baseline
+# workflow transition from branch/PR events by calling the Jira REST API,
+# so a work item advances even when a commit omits the smart-commit command.
+#
+# Required repository secrets:
+#   JIRA_BASE_URL    e.g. https://pearson.atlassian.net
+#   JIRA_USER_EMAIL  Jira account email used for API auth
+#   JIRA_API_TOKEN   API token for that account
+#
+# The Jira key is read from the branch name (pattern UIFPE-<number>). Matching
+# is done on the target STATUS name, so the "In Progress (1)" transition-name
+# caveat does not apply here.
+#
+# Also posts a Jira comment on the same event (commit/PR link + author) so
+# the hand-off is visible on the issue even when a commit omits the
+# smart-commit `#comment` command. The comment step runs independently of
+# whether the transition itself succeeded — a comment on its own is still
+# useful, and per the "never fails the build" rule below, neither step
+# should block the pipeline.
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    types: [opened, reopened, ready_for_review, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  transition:
+    name: Transition the Jira issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve issue key and target status
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BRANCH_REF: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+
+          # Extract the first UIFPE-<n> token from the branch name.
+          if [[ "$BRANCH_REF" =~ (UIFPE-[0-9]+) ]]; then
+            KEY="${BASH_REMATCH[1]}"
+          else
+            echo "No UIFPE key in branch '$BRANCH_REF'; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TARGET=""
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            TARGET="In Progress"
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$PR_ACTION" == "closed" ]]; then
+              if [[ "$PR_MERGED" == "true" ]]; then
+                TARGET="Ready for QA"
+              else
+                echo "PR closed without merge; no transition."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            elif [[ "$PR_DRAFT" == "true" ]]; then
+              TARGET="In Progress"
+            else
+              TARGET="Code Review"
+            fi
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Resolved $KEY -> '$TARGET'"
+
+      - name: Apply Jira transition
+        id: transition
+        if: steps.resolve.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          KEY: ${{ steps.resolve.outputs.key }}
+          TARGET: ${{ steps.resolve.outputs.target }}
+        run: |
+          set -euo pipefail
+
+          # Misconfiguration must not masquerade as a broken PR: without the
+          # documented secrets the API call can only fail, so surface a
+          # warning annotation and skip instead of going red.
+          if [[ -z "${JIRA_BASE_URL:-}" || -z "${JIRA_USER_EMAIL:-}" || -z "${JIRA_API_TOKEN:-}" ]]; then
+            echo "::warning::Jira secrets (JIRA_BASE_URL / JIRA_USER_EMAIL / JIRA_API_TOKEN) are not configured on this repository — transition for $KEY to '$TARGET' skipped."
+            exit 0
+          fi
+
+          # Find the transition whose destination status matches TARGET.
+          # Capture the HTTP status: on auth/permission errors Jira answers
+          # with {"errorMessages": [...]} and no transitions — that is a
+          # credentials problem to SURFACE, not a reason to fail the PR.
+          resp=$(curl -sS -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Accept: application/json" -w '\n%{http_code}' \
+            "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions")
+          code="${resp##*$'\n'}"
+          body="${resp%$'\n'*}"
+
+          if [[ "$code" != 2* ]]; then
+            echo "::warning::Jira API returned HTTP $code for $KEY — check JIRA_USER_EMAIL/JIRA_API_TOKEN (token must belong to that email) and that the account can see the UIFPE project. Jira said: $(printf '%s' "$body" | head -c 300)"
+            exit 0
+          fi
+
+          # (.transitions // [])[] — null-safe: an unexpected body shape must
+          # not crash jq (exit 5) and redden the PR.
+          transition_id=$(printf '%s' "$body" \
+            | jq -r --arg t "$TARGET" '(.transitions // [])[] | select(.to.name == $t) | .id' \
+            | head -n1 || true)
+
+          if [[ -z "$transition_id" || "$transition_id" == "null" ]]; then
+            echo "No available transition to '$TARGET' for $KEY (already there or not permitted); skipping."
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Transitioning $KEY to '$TARGET' (transition id $transition_id)."
+          curl -sS -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --fail-with-body \
+            --data "{\"transition\":{\"id\":\"$transition_id\"}}" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$KEY/transitions"
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+
+      - name: Post Jira comment
+        if: always() && steps.resolve.outputs.skip != 'true'
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          KEY: ${{ steps.resolve.outputs.key }}
+          TARGET: ${{ steps.resolve.outputs.target }}
+          APPLIED: ${{ steps.transition.outputs.applied }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            LINK="$PR_URL"
+            WHAT="PR ($PR_ACTION): $PR_TITLE"
+          else
+            LINK="$SERVER_URL/$REPO/commit/$SHA"
+            WHAT="Push $SHA"
+          fi
+
+          if [[ "$APPLIED" == "true" ]]; then
+            NOTE="Status moved to '$TARGET'."
+          else
+            NOTE="Attempted move to '$TARGET' (no-op — already there or not permitted)."
+          fi
+
+          TEXT="$WHAT by $ACTOR. $NOTE $LINK"
+
+          body=$(jq -n --arg text "$TEXT" '{
+            body: {
+              type: "doc", version: 1,
+              content: [{ type: "paragraph", content: [{ type: "text", text: $text }] }]
+            }
+          }')
+
+          # Best-effort: a failed comment never fails the build, matching the
+          # transition step's "never fails the build" behavior.
+          curl -sS -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data "$body" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$KEY/comment" \
+            || echo "Comment post failed for $KEY; continuing."

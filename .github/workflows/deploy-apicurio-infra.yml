@@ -1,0 +1,366 @@
+name: Deploy apicurio — infrastructure
+
+# Converges the Apicurio stack's INFRASTRUCTURE in one environment. It does not
+# promote application artifacts -- promote-apicurio.yml does that. The split
+# follows a real asymmetry: an application artifact promotes (copy the bytes,
+# prove the digest did not change), while infrastructure converges (apply the
+# same Terraform root with that environment's tfvars). There is no infra
+# artifact to carry.
+#
+# IDENTITY. Every run resolves its image digests from the pushed build tag's
+# release manifest, so even a full apply lands a known application version
+# rather than whatever happened to be latest. `latest` is never resolved here.
+#
+# WHY `push: tags` AND NOT workflow_dispatch. Two constraints, both verified:
+#   1. main is ~1,019 commits behind develop and carries 2 of 29 workflows.
+#      workflow_dispatch only fires for workflows on the default branch, so a
+#      dispatch-driven design cannot run at all today. (deploy-apicurio-dev.yml
+#      has the same dead dispatch block, and its own comment says so.)
+#   2. The uat GitHub Environment accepts tag refs matching apicurio/v* only.
+#      A dispatch run on develop targeting environment: uat is rejected.
+# A push-triggered run uses the workflow file from the PUSHED REF, so this
+# needs nothing on main. The dispatch block below is inert until main catches
+# up, and costs nothing meanwhile.
+#
+# THE HUMAN GATE is the uat Environment's required reviewer, which blocks the
+# job before it starts. Approving a deployment therefore approves the INTENT --
+# this tag, this environment -- not the plan text. To read the plan first, run
+# with the latch on `plan`, read it in the log, then set `apply` and re-run.
+# The tag is immutable, so the second run deploys the same identity.
+#
+# REPO VARIABLES (Settings -> Secrets and variables -> Actions -> Variables)
+#   APICURIO_UAT_INFRA   unset|skip = do nothing (DEFAULT)
+#                        plan       = plan only, changes nothing
+#                        apply      = apply the plan this run produced
+#                        bootstrap  = FIRST APPLY ONLY: create the ECR
+#                                     repository, then apply everything
+#   APICURIO_PROD_INFRA  same vocabulary, for prod
+#
+# Leave these unset outside a deploy window. They are a deploy-window latch,
+# not configuration -- the same discipline BEACON_INFRA and GOLD_INFRA
+# document.
+
+on:
+  push:
+    tags:
+      - "apicurio/v*"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [uat, prod]
+        default: uat
+      infra:
+        description: "Terraform action"
+        type: choice
+        options: [plan, apply, bootstrap, skip]
+        default: plan
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+
+  # Pearson's five mandatory tag values, passed exactly as
+  # deploy-apicurio-dev.yml passes them. They are deliberately NOT in
+  # envs/<env>.tfvars and deliberately have no defaults in variables.tf: a
+  # default would let a wrong value ship silently, and a wrong t_cost_centre
+  # misbills another team every month. Their absence is the guard working.
+  #
+  # Omitting them here is what made uat's first plan fail with five
+  # "No value for required variable" errors (run 35607090546) -- the plan
+  # cannot even be produced without them, which is the intended behaviour.
+  #
+  # TF_VAR_ names are CASE-SENSITIVE against the terraform variable: the
+  # variable is `t_app_id`, so the env var is TF_VAR_t_app_id. TF_VAR_t_AppID
+  # would be silently ignored.
+  #
+  # t_dcl is prefixed APICURIO_ because a data classification level is a
+  # property of the DATA A STACK HOLDS, not of the organisation.
+  TF_VAR_t_app_id: ${{ vars.T_APP_ID }}
+  TF_VAR_t_cost_centre: ${{ vars.T_COST_CENTRE }}
+  TF_VAR_t_dcl: ${{ vars.APICURIO_T_DCL }}
+  TF_VAR_t_owner_individual: ${{ vars.T_OWNER_INDIVIDUAL }}
+  TF_VAR_t_responsible_individuals: ${{ vars.T_RESPONSIBLE_INDIVIDUALS }}
+
+jobs:
+  resolve:
+    name: What this run will do
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.mode.outputs.environment }}
+      infra: ${{ steps.mode.outputs.infra }}
+      bff_digest: ${{ steps.manifest.outputs.bff_digest }}
+      registry_digest: ${{ steps.manifest.outputs.registry_digest }}
+    steps:
+      # fetch-depth 0 AND fetch-tags: read-manifest.sh reads the ANNOTATED TAG
+      # message, which a shallow clone does not carry -- and neither, it turns
+      # out, does a default tag checkout. See the re-fetch step below.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # actions/checkout fetches the RESOLVED COMMIT SHA into refs/tags/<name>,
+      # which produces a LIGHTWEIGHT tag locally and discards the annotation --
+      # and the annotation is the manifest. read-manifest.sh then correctly
+      # refuses with "is a LIGHTWEIGHT tag, which has no message".
+      #
+      # `fetch-tags: true` on the checkout above asks for +refs/tags/*, but it
+      # shares one fetch with the sha refspec and does not reliably win, so the
+      # tag object is re-fetched here explicitly and forcibly. Verified against
+      # a real run: without this, dispatching on apicurio/v0.2.0 failed at the
+      # first manifest read (run 35603264803).
+      - name: Re-fetch the annotated tag object
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          type="$(git cat-file -t "refs/tags/${TAG}")"
+          [ "$type" = "tag" ] \
+            || { echo "::error::refs/tags/${TAG} is a ${type}, not an annotated tag object, so it carries no manifest. The re-fetch did not recover the annotation."; exit 1; }
+          echo "::notice::${TAG} is an annotated tag object; its manifest is readable."
+
+      - id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_ENV: ${{ inputs.environment }}
+          IN_INFRA: ${{ inputs.infra }}
+          VAR_UAT: ${{ vars.APICURIO_UAT_INFRA }}
+          VAR_PROD: ${{ vars.APICURIO_PROD_INFRA }}
+        run: |
+          set -euo pipefail
+          resolver=stacks/apicurio/scripts/resolve-deploy-mode.sh
+
+          # A push carries no environment input. uat is the only environment a
+          # tag push targets today; prod is reached by dispatch once main
+          # carries this file, or by setting APICURIO_PROD_INFRA and dispatching.
+          environment="$("$resolver" \
+            --event "$EVENT" --input "${IN_ENV:-}" --var "uat" \
+            --allowed "uat,prod" --default "uat")"
+
+          case "$environment" in
+            uat)  var_value="${VAR_UAT:-}" ;;
+            prod) var_value="${VAR_PROD:-}" ;;
+          esac
+
+          infra="$("$resolver" \
+            --event "$EVENT" --input "${IN_INFRA:-}" --var "$var_value" \
+            --allowed "skip,plan,apply,bootstrap" --default "skip")"
+
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
+          echo "::notice::environment=$environment infra=$infra (tag ${GITHUB_REF_NAME})"
+
+          if [ "$infra" = "skip" ]; then
+            echo "::notice::The infra latch is skip, so this run changes nothing. Set APICURIO_${environment}_INFRA to plan, apply or bootstrap to open a deploy window."
+          fi
+
+      # Gated on the latch NOT being skip -- which is the default, and stays
+      # true for every tag push while no deploy window is open. read-manifest.sh
+      # refuses to yield ANY field from a manifest whose gate did not pass
+      # (a lightweight tag, a hand-cut tag, or a build tag whose CI gate
+      # failed), so running this unconditionally turns every such push red on
+      # a workflow that does nothing on its default path -- exactly the "red
+      # runs on a do-nothing workflow" pattern that let 39 CI failures stay
+      # invisible before. The "say what would have been deployed" value this
+      # step exists for is worth it on a path that actually does something
+      # (plan, apply, bootstrap); it is not worth a permanently red default.
+      - id: manifest
+        if: steps.mode.outputs.infra != 'skip'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          reader=stacks/apicurio/scripts/read-manifest.sh
+
+          # read-manifest.sh refuses any field from a manifest whose gate did
+          # not pass, and refuses a truncated, uppercase or mutable digest. So
+          # a value that comes back at all is already the right shape.
+          bff="$("$reader" "$TAG" bff.digest)"
+          registry="$("$reader" "$TAG" registry.digest)"
+
+          echo "bff_digest=$bff" >> "$GITHUB_OUTPUT"
+          echo "registry_digest=$registry" >> "$GITHUB_OUTPUT"
+          echo "::notice::bff=$bff registry=$registry"
+
+  # ONE-TIME BOOTSTRAP, and deliberately narrow. `terraform apply -target=` is
+  # an escape hatch: a targeted apply skips the rest of the configuration, so
+  # the resulting state does not correspond to the whole config. It is
+  # acceptable here for the same three reasons deploy-apicurio-dev.yml gives:
+  #   1. aws_ecr_repository.bff derives only from var.env, so it has no
+  #      dependents and no dependencies -- nothing else is half-created.
+  #   2. The guard below makes it a no-op the moment the repository exists.
+  #   3. The terraform job immediately reconciles everything else.
+  # This is NOT a pattern to reuse for ordinary changes.
+  #
+  # It exists because promote-apicurio.yml must push an image somewhere, and
+  # Terraform is what creates the repository.
+  ecr:
+    name: Bootstrap the ECR repository (${{ needs.resolve.outputs.environment }})
+    needs: resolve
+    if: needs.resolve.outputs.infra == 'bootstrap'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    # Same group as the terraform job below AND as promote-apicurio.yml's
+    # promote job: all three run a state-mutating `terraform apply` (or, for
+    # promote, an app-only one) against the same backend. `cancel-in-progress:
+    # false` protects a RUNNING member of the group from being cancelled by a
+    # new arrival, which is why a cancelled apply is something a human causes
+    # (approve-then-cancel, a job timeout), never this group. It does NOT
+    # protect a member that is only QUEUED: GitHub Actions keeps at most one
+    # PENDING run per concurrency group, so when a second run reaches this
+    # group while a member of it is still pending (not yet started), the
+    # earlier pending one is cancelled outright, with no failure message
+    # pointing at why. This is exactly the hazard behind never leaving both
+    # this workflow's and promote-apicurio.yml's latches open for the same tag
+    # push (see DEPLOY-UAT.md) -- both runs enter this same group, and which
+    # one ends up merely queued rather than cancelled is not guaranteed by
+    # `needs:`, which only orders jobs WITHIN one run.
+    concurrency:
+      group: apicurio-deploy-${{ needs.resolve.outputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: stacks/apicurio/infrastructure/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # Same pin as deploy-apicurio-dev.yml and stacks-ci.yml. A saved
+          # plan is only valid for the version that wrote it, so this must
+          # not drift from the workflow that applies alongside it.
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: Create the BFF repository if it does not exist
+        env:
+          ENV_NAME: ${{ needs.resolve.outputs.environment }}
+          REGISTRY_DIGEST: ${{ needs.resolve.outputs.registry_digest }}
+          BFF_DIGEST: ${{ needs.resolve.outputs.bff_digest }}
+        run: |
+          set -euo pipefail
+          repo="uif-apicurio-${ENV_NAME}-bff-ecr-repo"
+          if aws ecr describe-repositories --repository-names "$repo" >/dev/null 2>&1; then
+            echo "$repo already exists — no bootstrap needed."
+            exit 0
+          fi
+          echo "::notice::$repo does not exist — bootstrapping just that resource."
+          terraform init -reconfigure -input=false \
+            -backend-config="backends/${ENV_NAME}.hcl"
+          terraform apply -input=false -auto-approve \
+            -var-file="envs/${ENV_NAME}.tfvars" \
+            -var "bff_image_digest=${BFF_DIGEST}" \
+            -var "registry_image_digest=${REGISTRY_DIGEST}" \
+            -target=aws_ecr_repository.bff
+
+  terraform:
+    name: Terraform (${{ needs.resolve.outputs.environment }}, ${{ needs.resolve.outputs.infra }})
+    needs: [resolve, ecr]
+    # `always()` so a skipped ecr job does not skip this one, but a FAILED ecr
+    # job does. Without it, `needs: ecr` makes every non-bootstrap run skip.
+    if: >-
+      always()
+      && needs.resolve.result == 'success'
+      && needs.ecr.result != 'failure'
+      && needs.ecr.result != 'cancelled'
+      && needs.resolve.outputs.infra != 'skip'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    # One deploy at a time per environment, so an infra apply and a promote
+    # cannot interleave on one state file. Never cancel in progress: a
+    # cancelled apply can leave state locked.
+    concurrency:
+      group: apicurio-deploy-${{ needs.resolve.outputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: stacks/apicurio/infrastructure/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # Same pin as deploy-apicurio-dev.yml and stacks-ci.yml. A saved
+          # plan is only valid for the version that wrote it, so this must
+          # not drift from the workflow that applies alongside it.
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      # -reconfigure: with `backend "s3" {}` plus -backend-config, init would
+      # otherwise try to migrate state between differently-configured backends.
+      - name: Init
+        env:
+          ENV_NAME: ${{ needs.resolve.outputs.environment }}
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure -input=false \
+            -backend-config="backends/${ENV_NAME}.hcl"
+
+      - name: Plan
+        env:
+          ENV_NAME: ${{ needs.resolve.outputs.environment }}
+          BFF_DIGEST: ${{ needs.resolve.outputs.bff_digest }}
+          REGISTRY_DIGEST: ${{ needs.resolve.outputs.registry_digest }}
+        run: |
+          set -euo pipefail
+          terraform plan -input=false \
+            -var-file="envs/${ENV_NAME}.tfvars" \
+            -var "bff_image_digest=${BFF_DIGEST}" \
+            -var "registry_image_digest=${REGISTRY_DIGEST}" \
+            -out=tf.plan
+
+      # THREE CONSTRAINTS, all load-bearing and all inherited from
+      # deploy-apicurio-dev.yml:
+      #  1. Plan and apply are in the SAME job -- same runner, same filesystem,
+      #     nothing persisted. A saved plan is only valid for the Terraform
+      #     version that wrote it, and it must not leave the runner.
+      #  2. tf.plan is NEVER uploaded as an artifact, and `terraform show -json`
+      #     never reaches a log or an artifact. A saved plan contains every
+      #     generated value; grep finds nothing in it only because it is
+      #     compressed. RDS-managed credentials keep the DB password out, but
+      #     authorizer.tf still generates values.
+      #  3. No -auto-approve: not a valid pairing with a plan file, and not
+      #     needed, because Terraform does not prompt when handed one.
+      - name: Apply the reviewed plan
+        if: needs.resolve.outputs.infra == 'apply' || needs.resolve.outputs.infra == 'bootstrap'
+        run: terraform apply -input=false tf.plan
+
+      - name: Report the stack's URLs
+        if: needs.resolve.outputs.infra == 'apply' || needs.resolve.outputs.infra == 'bootstrap'
+        env:
+          ENV_NAME: ${{ needs.resolve.outputs.environment }}
+        run: |
+          set -euo pipefail
+          api="$(terraform output -raw bff_api_url 2>/dev/null || echo "")"
+          ui="$(terraform output -raw ui_url 2>/dev/null || echo "")"
+          echo "### apicurio ${ENV_NAME}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API: ${api:-<none>}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- UI:  ${ui:-<none>}" >> "$GITHUB_STEP_SUMMARY"
+
+          # The first apply of any environment cannot know its own CloudFront
+          # domain, because the distribution does not exist until this apply
+          # has run -- and the BFF only allows origins it was configured with.
+          if [ -n "$ui" ] && ! grep -q "$ui" "envs/${ENV_NAME}.tfvars"; then
+            echo "::notice::cors_origins in envs/${ENV_NAME}.tfvars does not name $ui yet. Add it and apply once more, or the UI cannot call the API. This is the documented second pass."
+          fi

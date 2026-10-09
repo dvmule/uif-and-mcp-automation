@@ -1,0 +1,14 @@
+# Gold pipeline: marketing_copy — dev overlay (deep-merged over
+# pipelines/base/marketing_copy.yaml). Only per-environment values belong here.
+
+enabled: true
+
+schema:
+  master_s3_path: s3://uif-echo-dev-gold-artifacts/schemas/gold/marketing_copy/v1/master.json
+
+mapping:
+  manifest_s3_path: s3://uif-echo-dev-gold-artifacts/mappings/marketing_copy/v1/manifest.yaml
+  sql_s3_path: s3://uif-echo-dev-gold-artifacts/mappings/marketing_copy/v1/sql/marketing_copy.sql
+
+target:
+  s3_path: s3://uif-echo-dev-gold/marketing_copy/

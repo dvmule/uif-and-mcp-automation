@@ -1,0 +1,86 @@
+# Starter template — async (AsyncAPI 3.0) contract, governed by Apicurio.
+# Copy into domains/<domain>/src/events/asyncapi.yaml; the sibling payload
+# schema goes in domains/<domain>/src/schemas/events/<resource>-<action>-data.json
+# (start from event.schema.template.json in this same folder).
+# Naming, envelope, delivery-semantics rules: ../../../capabilities/event/guidelines.md
+# Registry coordinate + compatibility rule: ../../../stacks/apicurio/standards/guidelines.md §1
+# Apicurio governance lifecycle: ../../../stacks/apicurio/standards/apicurio-governance.md
+asyncapi: 3.0.0
+info:
+  title: <Domain> <Resource> Events
+  version: 1.0.0
+  description: >
+    <One paragraph: what triggers this event, who produces it, at-least-once
+    or exactly-once delivery semantics.>
+  contact:
+    name: <domain> domain FDE
+x-registry:
+  group: <domain>
+  artifact: <domain>-<resource>-<action>-data
+  compatibility: BACKWARD
+
+defaultContentType: application/json
+
+channels:
+  <resource><Action>V1:
+    address: com.pearson.<domain>.<resource>.<action>.v1
+    description: >
+      One event type per channel (capabilities/event/guidelines.md §1) — never
+      multiplex several event types onto one shared topic.
+    x-partitionKey: id
+    messages:
+      <resource><Action>:
+        $ref: '#/components/messages/<Resource><Action>'
+
+operations:
+  publish<Resource><Action>:
+    action: send
+    channel:
+      $ref: '#/channels/<resource><Action>V1'
+    summary: <Publish X when Y happens.>
+    description: >
+      Delivery semantics: at-least-once. Consumers must be idempotent and
+      dedupe on the CloudEvents `id` (capabilities/event/guidelines.md §4).
+    messages:
+      - $ref: '#/channels/<resource><Action>V1/messages/<resource><Action>'
+
+components:
+  messages:
+    <Resource><Action>:
+      name: <Resource><Action>
+      title: <Resource> <action>
+      contentType: application/json
+      # The envelope is the shared, centrally-registered Apicurio artifact
+      # uif/pearson-event-envelope — referenced, never redefined here
+      # (stacks/apicurio/standards/apicurio-governance.md §3). Only `data`'s shape
+      # is owned by this domain.
+      payload:
+        allOf:
+          - $ref: 'https://schemas.pearson.com/uif/pearson-event-envelope/v1'
+          - type: object
+            properties:
+              data:
+                $ref: '../schemas/events/<resource>-<action>-data.json'
+      x-dataSchema: ../schemas/events/<resource>-<action>-data.json
+      x-dataClassification: internal
+      x-piiPresent: false
+      examples:
+        - name: worked-example
+          summary: <One realistic example.>
+          payload:
+            specversion: '1.0'
+            id: '<uuid>'
+            source: 'urn:pearson:svc:<service-name>'
+            type: com.pearson.<domain>.<resource>.<action>.v1
+            time: '2026-01-01T00:00:00.000000Z'
+            datacontenttype: application/json
+            dataschema: 'https://schemas.pearson.com/<domain>/<resource>-<action>-data/v1'
+            subject: <resource>/<id>
+            correlationid: '<uuid>'
+            partitionkey: '<id>'
+            # Delivery channel this copy is published for: event | message | api
+            channel: event
+            dataclassification: internal
+            piipresent: false
+            data:
+              id: '<id>'

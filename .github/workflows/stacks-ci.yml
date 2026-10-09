@@ -1,0 +1,1442 @@
+name: Stacks CI
+
+# Monorepo CI for deployable stacks (echo/beacon/harbor-shaped units — see
+# stacks/harbor/CLAUDE.md for what distinguishes a stack from a domain).
+# Mirrors domain-ci.yml's two structural gates, per ADR-0010's recommendation
+# to build this BEFORE Beacon migrates into stacks/, not after — so Beacon's
+# move doesn't have to be the first thing that proves whether equivalent
+# coverage exists. Kept as a SEPARATE file from domain-ci.yml rather than a
+# second matrix bolted on: stacks and domains are deliberately different
+# concepts (ADR-0009, ADR-0010) and conflating their CI would blur the same
+# line the file split under stacks/ vs domains/ already draws.
+#
+# Add a stack: create stacks/<name>/ — detection picks it up automatically
+# from the folder name, no workflow edit required (same convention as
+# domain-ci.yml).
+
+on:
+  push:
+    # develop as well as main, deliberately. Under this repo's model you merge
+    # once, into develop, and main only mirrors production -- so a gate that
+    # ran on main alone never saw the branch integration actually happens on.
+    # Every merge to develop now re-runs the stack's gate against the merged
+    # tree, which is the first point at which two independently-green pull
+    # requests are tested together.
+    branches: [main, develop]
+    paths:
+      - 'stacks/**'
+      # This file itself, so a change to the gate is tested BY the gate.
+      # Without it, a pull request touching only this workflow runs none of
+      # it -- which is exactly how a broken `uses:` reached develop and then
+      # failed 39 runs in a row. deploy-apicurio-dev.yml already lists its
+      # own path for the same reason. The path alone is NOT enough: detect
+      # must also return the full stack list for such a diff, or the workflow
+      # triggers and then runs zero jobs (UIFPE-491) - see the detect step.
+      - '.github/workflows/stacks-ci.yml'
+      # domains/** as well, for TWO independent reasons (UIFPE-738).
+      #
+      # 1. A stack's own tests read domain artifacts -- transform-ui's suite
+      #    asserts against the registered mappings and masters on purpose. A
+      #    domains-only diff did not start this workflow at all, so those
+      #    tests could never fire on the change that breaks them. The matrix
+      #    stays narrow: stacks/<stack>/ci-watch decides which stacks a
+      #    domains diff selects, and one matching nothing selects nothing.
+      # 2. The deployed-python jobs below are deliberately ESTATE-wide -- they
+      #    grep `stacks/ domains/` for every declared CPython and Glue
+      #    version, and fail when one has no parse leg. domains/ already
+      #    declares two python3.11 Lambdas, so a domain adding a runtime the
+      #    matrix cannot parse was invisible to the check written to catch it.
+      #
+      # Cost: a domains-only pull request now runs `detect` plus those two
+      # estate-wide jobs. Everything stack-scoped is already guarded by
+      # `stacks != '[]'`, so a domain change no stack watches adds no matrix
+      # jobs. Accepted deliberately over listing domain paths here, which
+      # would put the same knowledge in two places and drift.
+      - 'domains/**'
+  pull_request:
+    paths:
+      - 'stacks/**'
+      - '.github/workflows/stacks-ci.yml'
+      # domains/** as well, for TWO independent reasons (UIFPE-738).
+      #
+      # 1. A stack's own tests read domain artifacts -- transform-ui's suite
+      #    asserts against the registered mappings and masters on purpose. A
+      #    domains-only diff did not start this workflow at all, so those
+      #    tests could never fire on the change that breaks them. The matrix
+      #    stays narrow: stacks/<stack>/ci-watch decides which stacks a
+      #    domains diff selects, and one matching nothing selects nothing.
+      # 2. The deployed-python jobs below are deliberately ESTATE-wide -- they
+      #    grep `stacks/ domains/` for every declared CPython and Glue
+      #    version, and fail when one has no parse leg. domains/ already
+      #    declares two python3.11 Lambdas, so a domain adding a runtime the
+      #    matrix cannot parse was invisible to the check written to catch it.
+      #
+      # Cost: a domains-only pull request now runs `detect` plus those two
+      # estate-wide jobs. Everything stack-scoped is already guarded by
+      # `stacks != '[]'`, so a domain change no stack watches adds no matrix
+      # jobs. Accepted deliberately over listing domain paths here, which
+      # would put the same knowledge in two places and drift.
+      - 'domains/**'
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect touched stacks
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 7s observed.
+    timeout-minutes: 10
+    outputs:
+      stacks: ${{ steps.filter.outputs.stacks }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect touched stacks
+        id: filter
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          HEAD_SHA="${{ github.sha }}"
+
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            BASE_SHA=$(git rev-parse "$HEAD_SHA~1" 2>/dev/null || echo "$HEAD_SHA")
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          # A change to THIS FILE runs the FULL matrix (UIFPE-491). The path
+          # filter above includes this file so "a change to the gate is tested
+          # BY the gate" - but until now a workflow-only diff yielded an empty
+          # stack list and ran ZERO jobs, so the gate passed over nothing.
+          # Observed twice on 2026-09-21: PR #402 changed the SCA job itself and
+          # merged with every matrix job skipped. A gate change is exactly the
+          # change that most needs a shakedown (one bad uses: line here once
+          # failed 39 runs in a row), so it gets every stack, not the diff set.
+          if echo "$CHANGED" | grep -qx '.github/workflows/stacks-ci.yml'; then
+            STACKS_RAW=$(ls -d stacks/*/ | cut -d/ -f2)
+          else
+            STACKS_RAW=$(echo "$CHANGED" | grep '^stacks/' | cut -d/ -f2 | sort -u || true)
+          fi
+
+          # Cross-stack coupling. The matrix above is purely "which
+          # stacks/<name>/ appears in the diff", so a test that reads ANOTHER
+          # stack's file cannot fire on the change that breaks it: the
+          # breaking diff selects a matrix the test is not in. Two did on
+          # 2026-09-30 and reached develop unseen -- Beacon's token values
+          # broke echo's parity test (UIFPE-727) and event's copy of
+          # check-version.sh broke echo's and apicurio's identity tests
+          # (UIFPE-730). A stack now DECLARES the outside paths its own tests
+          # read, in stacks/<stack>/ci-watch, and a change to one selects that
+          # stack as well (UIFPE-728). Declarative so the next cross-stack
+          # reader needs no edit here; git pathspec so the matching is git's.
+          for watch in stacks/*/ci-watch; do
+            [ -f "$watch" ] || continue
+            s=$(echo "$watch" | cut -d/ -f2)
+            while IFS= read -r pat || [ -n "$pat" ]; do
+              # Strip a trailing CR: a Windows-authored ci-watch makes a blank
+              # line read as "\r", which is not empty and would be taken for a
+              # pattern matching nothing -- failing the step on a file that is fine.
+              pat=${pat%$'\r'}
+              case "$pat" in ''|'#'*) continue ;; esac
+              # A pattern matching nothing watches nothing, which IS the
+              # failure being fixed -- refuse it rather than pass silently.
+              if [ -z "$(git ls-files -- "$pat")" ]; then
+                echo "::error::stacks/$s/ci-watch names '$pat', which matches no tracked file"
+                exit 1
+              fi
+              if [ -n "$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- "$pat")" ]; then
+                echo "::notice::$s also selected: it watches $pat, which changed"
+                STACKS_RAW=$(printf '%s\n%s' "$STACKS_RAW" "$s")
+              fi
+            done < "$watch"
+          done
+          STACKS_RAW=$(echo "$STACKS_RAW" | grep -v '^$' | sort -u || true)
+
+          # A stack renamed/removed in this diff still shows up as "touched"
+          # by the path grep above — skip anything without a real directory
+          # at HEAD instead of scheduling a job that would just fail trying
+          # to cd into it. (domain-ci.yml hit this exact failure mode for a
+          # removed domain; applying the same guard here from day one rather
+          # than waiting to rediscover it.)
+          # if/fi rather than the && it used to be: under set -e, a && whose
+          # LAST iteration tests a missing directory exits the subshell non-zero
+          # and killed this whole step - the guard against a removed stack was
+          # itself a way for a removed stack to fail detection (UIFPE-491).
+          if [ -n "$STACKS_RAW" ]; then
+            STACKS_RAW=$(echo "$STACKS_RAW" | while read -r s; do if [ -d "stacks/$s" ]; then echo "$s"; fi; done)
+          fi
+
+          if [ -z "$STACKS_RAW" ]; then
+            STACKS_JSON="[]"
+          else
+            STACKS_JSON=$(echo "$STACKS_RAW" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          fi
+
+          echo "stacks=$STACKS_JSON" >> "$GITHUB_OUTPUT"
+          echo "Touched stacks: $STACKS_JSON"
+
+  # NOTHING validated a declared VERSION at pull-request time before this.
+  # release-{echo,apicurio}.yml run check-version.sh only AFTER a merge to
+  # develop, so a malformed, backwards or already-claimed number was invisible
+  # until the cheapest moment to refuse it had passed.
+  #
+  # The number that bites is "already claimed". A declared version is not a
+  # lock: two open pull requests can each declare it, the first to merge cuts
+  # the tag, and the second merge writes the same bytes so the release
+  # workflow's `paths: VERSION` filter never fires it — that branch ships with
+  # no build tag naming it, silently. echo/v0.7.0 was cut on #613 and does not
+  # contain #614 (2026-09-27).
+  #
+  # Its own job, not a step in the matrix below: this needs full history and
+  # tags, and the `ci` job's checkout is deliberately shallow.
+  version:
+    name: Declared versions are still free
+    needs: detect
+    if: github.event_name == 'pull_request' && needs.detect.outputs.stacks != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check every touched stack that declares a VERSION
+        env:
+          STACKS: ${{ needs.detect.outputs.stacks }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          # Tags as well as the base tip: the script's existing checks read
+          # every <component>/v* tag, and a pull-request checkout has none.
+          git fetch --quiet --tags origin "$BASE"
+          base="$(git rev-parse FETCH_HEAD)"
+          checked=0
+          for stack in $(printf '%s' "$STACKS" | jq -r '.[]'); do
+            vf="stacks/${stack}/VERSION"
+            script="stacks/${stack}/scripts/check-version.sh"
+            [ -f "$vf" ] && [ -f "$script" ] || continue
+            # Only a pull request that CHANGES VERSION is claiming a release.
+            # Without this every pull request that leaves VERSION alone would
+            # fail, because an unchanged file trivially matches the base's.
+            if git diff --quiet "$(git merge-base "$base" HEAD)" HEAD -- "$vf"; then
+              echo "::notice::${stack}: VERSION unchanged; no release claimed."
+              continue
+            fi
+            echo "${stack}: this pull request bumps VERSION — checking it is still free"
+            COMPONENT="$stack" bash "$script" "$vf" --against "$base"
+            checked=$((checked + 1))
+          done
+          echo "::notice::validated ${checked} declared version(s)"
+
+  ci:
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]'
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 1m45s observed on apicurio, the largest stack.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    name: ci (${{ matrix.stack }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record run start (for pipeline health metric below)
+        run: echo "CI_START_TIME=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Definition-of-done gate
+        working-directory: stacks/${{ matrix.stack }}
+        run: |
+          set -euo pipefail
+          # Enforce what's true of every stack regardless of maturity:
+          # CHECKLIST.md (not DOMAIN-CHECKLIST.md — a stack is not a domain,
+          # per ADR-0009/ADR-0010) and qe/ both exist, even if qe/ is
+          # currently just the convention README a scaffold-only stack
+          # carries (UIFPE-222 established this for stacks/harbor/).
+          test -f CHECKLIST.md || { echo "missing CHECKLIST.md"; exit 1; }
+          test -d qe || { echo "missing qe/ (tests + quality strategy required)"; exit 1; }
+
+          # A stack still in scaffold phase — nothing under src/ but the
+          # convention README.md itself — has nothing yet to structurally
+          # gate beyond the two checks above. Forcing src/Dockerfile or
+          # src/schemas/ to exist this early would mean creating exactly the
+          # empty stub files this repo's own rule against premature
+          # structure exists to prevent (see stacks/harbor/src/README.md).
+          # Once real code lands under src/, the stricter checks apply.
+          if find src -type f ! -name README.md 2>/dev/null | grep -q .; then
+            # The build contract, one of two shapes.
+            #
+            # A containerised stack builds ONE image from src/Dockerfile - the
+            # rule-3 contract in the root CLAUDE.md.
+            #
+            # A stack that ships zips instead - Glue scripts and Lambda bundles,
+            # with no image anywhere - declares that in src/NO-IMAGE.md, which
+            # has to say why. Both Echo and Beacon are in that position, and
+            # Beacon already declares it in prose in its CHECKLIST.md
+            # ("this stack ships zero images"); this gate simply could not read
+            # it. A sentinel file rather than grepping CHECKLIST.md on purpose:
+            # CI must not depend on matching an English sentence somebody will
+            # reword, and a file at the path where the Dockerfile would be is
+            # where a reader looks for it.
+            #
+            # The check still fails closed. Shipping neither is an omission, and
+            # claiming the exemption requires writing down the reason.
+            if [ -f src/Dockerfile ]; then
+              echo "build contract: one image (src/Dockerfile)"
+            elif [ -f src/NO-IMAGE.md ]; then
+              echo "build contract: zero images (declared in src/NO-IMAGE.md)"
+            else
+              echo "missing src/Dockerfile (one image = the build contract, once real code lands)"
+              echo "  - if this stack ships zips rather than an image, add src/NO-IMAGE.md stating why"
+              exit 1
+            fi
+            test -d src/schemas || { echo "missing src/schemas/ (Schema Registry First, once real code lands)"; exit 1; }
+            echo "structural gate passed for ${{ matrix.stack }} (built)"
+          else
+            echo "structural gate passed for ${{ matrix.stack }} (scaffold-only — src/Dockerfile and src/schemas/ checks deferred until real code lands)"
+          fi
+
+      # Same non-negotiable Pearson identity/secrets gate as domain-ci.yml —
+      # only fires once a stack actually ships an openapi.yaml or Helm
+      # templates; scaffold-only stacks stay green. See
+      # capabilities/infrastructure/kubernetes.md "Identity & secrets".
+      - name: Entra ID + Keeper gate
+        working-directory: stacks/${{ matrix.stack }}
+        run: |
+          set -euo pipefail
+          if [ -f src/api/openapi.yaml ]; then
+            # Entra ID check disabled (PR #21, entraid_remove) — same
+            # posture as domain-ci.yml's identical gate.
+            :
+          fi
+          if [ -d infrastructure/helm/templates ] && ls infrastructure/helm/templates/*.yaml >/dev/null 2>&1; then
+            if grep -rlq "kind: ExternalSecret" infrastructure/helm/templates/; then
+              grep -rq "keeper-secrets-manager" infrastructure/helm/templates/ \
+                || { echo "FAIL: ExternalSecret must reference the Keeper ClusterSecretStore (keeper-secrets-manager)"; exit 1; }
+              ! grep -rqE "aws-secrets-manager|hashicorp-vault|azure-keyvault" infrastructure/helm/templates/ \
+                || { echo "FAIL: only Keeper is the permitted secret store"; exit 1; }
+            fi
+          fi
+          echo "identity/secrets gate passed for ${{ matrix.stack }}"
+
+      # The stack's real build/test/scan, delegated to the stack itself.
+      #
+      # Each stack owns its gate in `qe/ci.sh`; this workflow owns only the
+      # toolchains that script needs. Same reason .githooks/lint-commits.sh
+      # exists: the gate is defined once, so CI and an FDE about to push run
+      # the identical checks and cannot disagree. The root CLAUDE.md's actual
+      # requirement is not a particular editor, it is that a contributor "can
+      # run the same checks CI enforces before you push" — which is only true
+      # if there is one script to run.
+      #
+      # It also keeps this file's stated convention intact: adding a stack
+      # needs no workflow edit. A stack with no qe/ci.sh stays green and says
+      # so, which is the scaffold-only posture the two gates above already
+      # take.
+      - name: Probe the stack's toolchains
+        id: toolchain
+        working-directory: stacks/${{ matrix.stack }}
+        run: |
+          set -uo pipefail
+          emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "  $1=$2"; }
+          # Does this stack need the Python toolchain? NOT "does it have a
+          # packaged src/" - that was an apicurio-shaped question and it
+          # answered NO for echo, which has Python everywhere but no
+          # pyproject.toml. The `ci (echo)` check therefore reported success
+          # having executed none of echo's 49 test files (UIFPE-469). Ask
+          # instead whether there is Python here for a gate to run.
+          if [ -f src/pyproject.toml ] \
+             || [ -n "$(find . -name 'requirements*.txt' -not -path '*/node_modules/*' -print -quit)" ] \
+             || [ -n "$(find qe -name '*.py' -print -quit 2>/dev/null)" ]; then
+            emit python true
+          else
+            emit python false
+          fi
+          [ -f ui/package.json ]          && emit node      true || emit node      false
+          [ -d infrastructure/terraform ] && emit terraform true || emit terraform false
+          [ -f src/Dockerfile ]           && emit dockerfile true || emit dockerfile false
+          [ -x qe/ci.sh ]                 && emit gate      true || emit gate      false
+          # A qe/ci.sh that is present but not executable is a mistake that
+          # would otherwise read as "this stack has no gate".
+          if [ -f qe/ci.sh ] && [ ! -x qe/ci.sh ]; then
+            echo "::error::stacks/${{ matrix.stack }}/qe/ci.sh exists but is not executable — chmod +x it and commit the mode bit"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.toolchain.outputs.python == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install the Python gate's tools
+        if: steps.toolchain.outputs.python == 'true'
+        working-directory: stacks/${{ matrix.stack }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          # Pinned for the same reason terraform is below: an unpinned linter
+          # changes a run's verdict with no commit. ruff in particular adds
+          # rules in minor releases, so `pip install ruff` would eventually
+          # fail a pull request that changed nothing.
+          python -m pip install --quiet 'ruff==0.16.2' pytest pytest-asyncio respx
+          # uv, for qe/ci.sh's `uv lock --check` gate. Same pin as the SCA job
+          # below, and for the same reason: the two must agree on whether a
+          # lockfile is in sync, and a different resolver major is a different
+          # verdict. Without it this job FAILS rather than skipping -- a
+          # missing tool in CI is a failure by ci.sh's own rule, since a
+          # skipped gate reporting success is worse than no gate.
+          python -m pip install --quiet 'uv==0.12.16'
+          # A packaged stack installs itself; one without a pyproject declares
+          # its dependencies in requirements files instead. Installing whatever
+          # the STACK declares keeps this workflow ignorant of any particular
+          # stack, which is this file's stated convention: adding a stack needs
+          # no workflow edit.
+          if [ -f src/pyproject.toml ]; then
+            python -m pip install --quiet -e src/
+          else
+            found=0
+            while IFS= read -r req; do
+              echo "  pip install -r $req"
+              python -m pip install --quiet -r "$req"
+              found=1
+            done < <(find . -name 'requirements*.txt' -not -path '*/node_modules/*' | sort)
+            if [ "$found" -eq 0 ]; then
+              echo "  no pyproject.toml and no requirements*.txt - nothing to install"
+            fi
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.toolchain.outputs.node == 'true'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: stacks/${{ matrix.stack }}/ui/package-lock.json
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.toolchain.outputs.terraform == 'true'
+        with:
+          # Pinned, not `latest`. Two reasons, and the second is the sharp one:
+          #  - An unpinned action means a CI run's Terraform version changes
+          #    under you with no commit, which is the CI-drift this repo pins
+          #    provider versions to avoid.
+          #  - Terraform 1.15.0 specifically validated `backend` block
+          #    attributes statically (hashicorp/terraform#38021), which fails
+          #    `terraform validate` on every module here using partial backend
+          #    config. Reverted in 1.15.1 (#38466, #38468). `latest` happens to
+          #    be past it today; that is luck, not a guarantee.
+          # Same pin as deploy-product-prod.yml.
+          terraform_version: "1.15.8"
+
+      # tflint, which qe/ci.sh runs against the Terraform module.
+      #
+      # Installed as a pinned binary rather than via
+      # terraform-linters/setup-tflint@v4, and NOT as a matter of style: that
+      # action is refused by the enterprise Actions policy, which admits only
+      # actions owned by the enterprise, created by GitHub, verified in the
+      # Marketplace, or matching an allow-list pattern. `terraform-linters` is
+      # none of those, and the policy is set at org/enterprise level -- a repo
+      # admin cannot allow-list it here (the API answers 409).
+      #
+      # What that cost, so nobody reintroduces it: a disallowed action is a
+      # WORKFLOW-level error, not a step-level one, so this single reference
+      # failed every job in this file at startup -- detect, ci, SCA, SAST and
+      # SIF alike -- for 39 consecutive runs between 2026-09-15 and 2026-09-18.
+      # Nothing reported it as a test failure, because nothing ever started. On
+      # such a run, read the run's own error; there are no job logs to read.
+      #
+      # Same shape as the hadolint install below: pinned release, checksum
+      # verified, binary on PATH and nothing more, so ci.sh stays the single
+      # thing that invokes it. It also takes the allow-list out of this
+      # workflow's dependencies, which is what contract-governance.yml's own
+      # header recommends ("no third-party action, so this never depends on the
+      # repo's Actions allow-list").
+      #
+      # The other actions here are deliberately left as actions, each with
+      # evidence it is permitted: actions/* are GitHub-created;
+      # hashicorp/setup-terraform and aws-actions/configure-aws-credentials are
+      # Marketplace-verified and run green in sibling repos in this org;
+      # aquasecurity/setup-trivy runs green in deploy-apicurio-dev.yml; and
+      # pearson-adm-gitworks/action-security-scan is enterprise-owned.
+      - name: Install tflint
+        if: steps.toolchain.outputs.terraform == 'true'
+        env:
+          TFLINT_VERSION: v0.64.0
+          # From the release's own checksums.txt. On a version bump, update
+          # both in the same commit -- do not delete the check to get a green
+          # run.
+          TFLINT_SHA256: cca9d13e2e1d7a2c627af60ff899a3c9b74212899416aeb96ec764d2ef954537
+        run: |
+          set -euo pipefail
+          url="https://github.com/terraform-linters/tflint/releases/download/${TFLINT_VERSION}/tflint_linux_amd64.zip"
+          curl -fsSL -o /tmp/tflint.zip "$url"
+          echo "${TFLINT_SHA256}  /tmp/tflint.zip" | sha256sum -c -
+          unzip -o -q /tmp/tflint.zip -d /tmp/tflint-bin
+          sudo mv /tmp/tflint-bin/tflint /usr/local/bin/tflint
+          tflint --version
+
+      # trivy, which qe/ci.sh runs against both the Terraform module and
+      # src/Dockerfile. Without this step the gate hits its own
+      # missing_tool path and FAILS -- deliberately, because CI does not pass
+      # --allow-missing-tools and a scanner that reports success without
+      # running is worse than no scanner. Installed for any stack with either
+      # a terraform directory or a Dockerfile, since the script scans both.
+      #
+      # Pinned to the version the findings were triaged against. The
+      # suppressions in the Terraform are per-check-id, and a newer trivy adds
+      # checks, so an unpinned scanner would fail a pull request that changed
+      # nothing.
+      - uses: aquasecurity/setup-trivy@v0.3.1
+        if: steps.toolchain.outputs.terraform == 'true' || steps.toolchain.outputs.dockerfile == 'true'
+        with:
+          version: v0.74.0
+          cache: true
+
+      # hadolint, which qe/ci.sh runs against src/Dockerfile. Without this step
+      # the gate takes its own missing-tool path and FAILS -- that exact mistake
+      # shipped once already in this workflow, when the trivy gate was added to
+      # ci.sh before the setup-trivy step above existed, so the first run failed
+      # on a tool rather than on the code.
+      #
+      # Installed by pinned binary rather than via hadolint/hadolint-action,
+      # because that action runs the lint itself and reports its own result;
+      # ci.sh is the single gate definition and has to be the thing that invokes
+      # it, so what is needed here is the binary on PATH and nothing more.
+      #
+      # Pinned to a release, and the checksum is verified. An unpinned "latest"
+      # would add rules under a pull request that changed nothing -- the same
+      # reasoning that pins trivy to v0.74.0 and tflint to v0.64.0 above. The
+      # runner is x86_64; hadolint publishes linux-arm64 too, so this needs
+      # revisiting if these jobs ever move to an arm runner.
+      - name: Install hadolint
+        if: steps.toolchain.outputs.dockerfile == 'true'
+        env:
+          HADOLINT_VERSION: v2.15.1
+          HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+        run: |
+          set -euo pipefail
+          url="https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-linux-x86_64"
+          curl -fsSL -o /tmp/hadolint "$url"
+          # Fail on a checksum mismatch rather than lint with an unexpected
+          # binary. If this trips after a re-tag, read the release's
+          # checksums.sha256 and update HADOLINT_SHA256 in the same commit as
+          # the version bump -- do not delete the check to get a green run.
+          echo "${HADOLINT_SHA256}  /tmp/hadolint" | sha256sum -c -
+          chmod +x /tmp/hadolint
+          sudo mv /tmp/hadolint /usr/local/bin/hadolint
+          hadolint --version
+
+      - name: Build / test / scan
+        if: steps.toolchain.outputs.gate == 'true'
+        working-directory: stacks/${{ matrix.stack }}
+        # No --allow-missing-tools. Every tool the gate needs is installed
+        # above, so a missing one is a workflow bug and has to fail rather than
+        # be skipped — a scanner that reports success without running is worse
+        # than no scanner, because it looks like coverage.
+        run: ./qe/ci.sh
+
+      - name: Build / test / scan (no gate declared)
+        if: steps.toolchain.outputs.gate != 'true'
+        run: |
+          echo "::notice::stacks/${{ matrix.stack }} declares no qe/ci.sh — structural gates only. Add one when code lands."
+      # Pipeline self-observability, same shape as domain-ci.yml's — one
+      # CloudWatch EMF log event per stack per run. Inert until
+      # UIF_CI_TELEMETRY_ROLE_ARN is configured, same "scaffold-safe until
+      # wired" posture.
+      - name: Configure AWS credentials (CI telemetry)
+        if: always() && vars.UIF_CI_TELEMETRY_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.UIF_CI_TELEMETRY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Emit CI health metric (CloudWatch EMF)
+        if: always() && vars.UIF_CI_TELEMETRY_ROLE_ARN != ''
+        run: |
+          set -euo pipefail
+          DURATION=$(( $(date +%s) - CI_START_TIME ))
+          EMF=$(jq -n \
+            --arg stack "${{ matrix.stack }}" \
+            --arg status "${{ job.status }}" \
+            --argjson duration "$DURATION" \
+            --argjson ts "$(date +%s%3N)" \
+            '{
+              "_aws": {
+                "Timestamp": $ts,
+                "CloudWatchMetrics": [{
+                  "Namespace": "UIF/CI",
+                  "Dimensions": [["Stack", "Status"]],
+                  "Metrics": [
+                    {"Name": "PipelineRun", "Unit": "Count"},
+                    {"Name": "PipelineDurationSeconds", "Unit": "Seconds"}
+                  ]
+                }]
+              },
+              "Stack": $stack,
+              "Status": $status,
+              "PipelineRun": 1,
+              "PipelineDurationSeconds": $duration
+            }')
+          aws logs put-log-events \
+            --log-group-name /uif/ci/pipeline-health \
+            --log-stream-name "${{ matrix.stack }}" \
+            --log-events "[{\"timestamp\": $(date +%s%3N), \"message\": $(jq -Rs . <<< "$EMF")}]"
+
+  # ---------------------------------------------------------------------------
+  # Pearson Snyk security scanning — SCA + SAST, two jobs in parallel.
+  #
+  # Additive to the `ci` job above, NOT a replacement for any of it. `ci` still
+  # owns the structural gates and still delegates the real build/test/scan to
+  # the stack's own qe/ci.sh (trivy, tflint, and the image CVE gate live there,
+  # and this file deliberately does not duplicate them). These jobs depend only
+  # on `detect`, so they neither block nor are blocked by `ci` — a Snyk finding
+  # and a gate failure are reported independently.
+  #
+  # Action version: pinned to v24, the action's current latest tag. NOTE for
+  # anyone cross-referencing the internal pipeline notes, which say v15: that
+  # is stale. The input surface is unchanged between v15 and v24 (v24 only adds
+  # `sca_exported_venv`, for scanning a venv exported from a Docker layer —
+  # not applicable here), so this is a version bump with no call-site changes.
+  #
+  # GWKS_SNYK_TOKEN exists and this is the exact name: it is set at REPOSITORY
+  # scope on pearson-dnt-coe/universal-Integration-framework (confirmed with
+  # `gh secret list --repo ...`), not inherited from the org as the internal
+  # notes describe. Do not rename it and do not add a fallback.
+  #
+  # Repo scope has one consequence worth knowing, because it is the failure
+  # mode that looks like a scanner bug and is actually a configuration one:
+  # repository secrets are NOT exposed to workflows triggered by a
+  # `pull_request` from a FORK. This workflow's `on:` includes a bare
+  # `pull_request`, which does fire for fork PRs, so on such a run
+  # `secrets.GWKS_SNYK_TOKEN` resolves to an empty string and the scan step
+  # fails on the action's required-input validation rather than on a finding.
+  # The repo is internal and PRs normally come from branches in it, so this is
+  # an edge case — but if fork PRs ever become normal here, move the secret to
+  # org scope or gate these jobs on
+  # `github.event.pull_request.head.repo.full_name == github.repository`.
+  #
+  # Still unverified, and only a real run can prove it:
+  # `pearson-adm-gitworks/action-security-scan` has `internal` visibility, so
+  # it resolves from this org only if the org's Actions policy permits actions
+  # from other pearson-* orgs.
+  # ---------------------------------------------------------------------------
+  deployed-python:
+    name: deployed python ${{ matrix.pyver }} parses
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 22s observed on the slowest leg (3.9).
+    timeout-minutes: 15
+    # Deliberately NOT gated on `detect` (same reason as before UIFPE-468):
+    # these legs are cheap and must run when only this workflow changes.
+    #
+    # WHY A MATRIX (UIFPE-468, generalising UIFPE-457's single job). The estate
+    # deploys to FIVE CPython versions, and a file valid on one can be a
+    # SyntaxError on another - PR #379 shipped exactly that to a 3.11 Lambda
+    # from a 3.12-tested tree. One leg per deployed version, each resolving its
+    # own file set from the deploy definitions that put those files there.
+    #
+    # THE LEGS ARE DECLARED, NOT DISCOVERED, and every leg carries rot-guards
+    # anchored to the Terraform block that justifies it: if that block's
+    # version moves, the leg FAILS naming the move, instead of parsing files at
+    # a version they no longer deploy to. The companion job
+    # `deployed-python-coverage` closes the other direction - a runtime
+    # appearing anywhere in the estate that no leg covers fails the build. So
+    # growth is fail-closed in both directions without this file trying to be
+    # an HCL parser.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pyver: "3.9"    # Glue pythonshell: echo bq-native + event publish
+          - pyver: "3.10"   # echo Glue 4.0 (silver-reconcile)
+          - pyver: "3.11"   # echo Lambdas + Glue 5.x, gold root, beacon Glue 5.0, marketing-copy Lambdas
+          - pyver: "3.12"   # apicurio + beacon Lambdas
+          - pyver: "3.13"   # event stack Lambdas
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve this runtime's deployed sources
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          DEPLOYED_LIST="$RUNNER_TEMP/deployed-python.txt"
+          echo "DEPLOYED_LIST=$DEPLOYED_LIST" >> "$GITHUB_ENV"
+          : > "$DEPLOYED_LIST"
+
+          # guard_block <tf-file> <resource-regex> <needle> - asserts the named
+          # resource block still contains the line that justifies this leg, so
+          # a version bump there fails HERE with instructions, not silently.
+          guard_block() {
+            sed -n "/resource \"aws_glue_job\" \"$2\"/,/^}/p" "$1" | grep -q "$3" \
+              || fail "$1: resource $2 no longer declares '$3' - its runtime moved. Move its script to the right leg of this matrix (and update the guard), rather than parsing it at a version it no longer deploys to."
+          }
+
+          case "${{ matrix.pyver }}" in
+            3.9)
+              # Three pythonshell jobs, each named and each guarded
+              # (fabric-recovery added 2026-09-24, UIFPE-184).
+              guard_block stacks/echo/infrastructure/terraform/glue.tf      generic_silver_bq_native 'python_version[[:space:]]*=[[:space:]]*"3\.9"'
+              guard_block stacks/event/infrastructure/terraform/glue.tf     event_fabric_processor   'python_version[[:space:]]*=[[:space:]]*"3\.9"'
+              guard_block stacks/event/infrastructure/terraform/recovery.tf event_fabric_recovery    'python_version[[:space:]]*=[[:space:]]*"3\.9"'
+              printf '%s\n' \
+                stacks/echo/src/apps/pipeline/silver-transform-bq-native.py \
+                stacks/event/src/glue/event_fabric_processor.py \
+                stacks/event/src/glue/event_fabric_recovery.py > "$DEPLOYED_LIST"
+              # Completeness for THIS version: exactly the three declarations.
+              N=$(grep -rhoE 'python_version[[:space:]]*=[[:space:]]*"3\.9"' --include=*.tf stacks/ domains/ | wc -l)
+              [ "$N" -eq 3 ] || fail "expected exactly 3 python_version=3.9 declarations in the estate, found $N - a pythonshell job was added or removed; update this leg deliberately"
+              MIN=3
+              ;;
+            3.10)
+              guard_block stacks/echo/infrastructure/terraform/glue.tf generic_silver_reconcile 'glue_version[[:space:]]*=[[:space:]]*"4\.0"'
+              echo stacks/echo/src/apps/pipeline/silver-reconcile.py > "$DEPLOYED_LIST"
+              N=$(grep -rhoE 'glue_version[[:space:]]*=[[:space:]]*"4\.0"' --include=*.tf stacks/ domains/ | wc -l)
+              [ "$N" -eq 1 ] || fail "expected exactly 1 glue_version=4.0 job in the estate, found $N - update this leg deliberately"
+              MIN=1
+              ;;
+            3.11)
+              # (a) The gold root: three declaration sources, as before UIFPE-468.
+              # Guard both roots' version assumptions before resolving a file.
+              grep -rq 'runtime[[:space:]]*=[[:space:]]*"python3\.11"' stacks/echo/infrastructure/terraform-gold/                 || fail "the gold root no longer deploys python3.11 - re-derive this leg"
+              grep -rq 'runtime[[:space:]]*=[[:space:]]*"python3\.11"' stacks/echo/infrastructure/terraform/lambda.tf                 || fail "echo lambda.tf no longer deploys python3.11 - re-derive this leg"
+              ROOT=stacks/echo/infrastructure/terraform-gold
+              {
+                grep -rhoE 'file\("\$\{path\.module\}/[^"]+\.py"\)' "$ROOT"/*.tf \
+                  | sed -E 's|file\("\$\{path\.module\}/||; s|"\)$||'
+                grep -rhoE 'source[[:space:]]*=[[:space:]]*"\$\{path\.module\}/[^"]+\.py"' "$ROOT"/*.tf \
+                  | sed -E 's|.*"\$\{path\.module\}/||; s|"$||'
+                if [ -f "$ROOT/Makefile" ]; then
+                  sed -n '/^build-preview:/,/^$/p' "$ROOT/Makefile" \
+                    | grep -oE '\$\(PREVIEW_SRC\)/[^ \\]+\.py' \
+                    | sed -E 's|\$\(PREVIEW_SRC\)|../../src|'
+                fi
+              } | sed -E "s|^|$ROOT/|" | xargs -r -n1 realpath --relative-to=. -m >> "$DEPLOYED_LIST"
+
+              # (b) The echo stack root: Lambda archives via file(), Glue 5.1
+              # scripts via filemd5() - MINUS the two files the 3.9/3.10 legs
+              # own (they sit in the same root at other versions).
+              ROOT=stacks/echo/infrastructure/terraform
+              {
+                grep -rhoE 'file\("\$\{path\.module\}/[^"]+\.py"\)' "$ROOT"/*.tf \
+                  | sed -E 's|file\("\$\{path\.module\}/||; s|"\)$||'
+                grep -rhoE 'filemd5\("\$\{path\.module\}/[^"]+\.py"\)' "$ROOT"/*.tf \
+                  | sed -E 's|filemd5\("\$\{path\.module\}/||; s|"\)$||'
+              } | sed -E "s|^|$ROOT/|" | xargs -r -n1 realpath --relative-to=. -m \
+                | grep -vxF stacks/echo/src/apps/pipeline/silver-transform-bq-native.py \
+                | grep -vxF stacks/echo/src/apps/pipeline/silver-reconcile.py >> "$DEPLOYED_LIST"
+
+              # (c) Beacon's Glue 5.0 side: the engine zip is built by
+              # deploy-beacon-dev.yml from exactly these two trees plus the
+              # entrypoint (see its "Stage Glue transform artifacts" step).
+              grep -q 'glue_version[[:space:]]*=[[:space:]]*"5\.0"' stacks/beacon/infrastructure/terraform/glue.tf \
+                || fail "beacon glue.tf no longer declares glue_version 5.0 - re-derive this leg's beacon scope"
+              find stacks/beacon/src/apps/beacon_export stacks/beacon/src/libs/dynamic_mapping -name '*.py' >> "$DEPLOYED_LIST"
+
+              # (d) The marketing-copy Lambdas (source_dir archives, 3.11).
+              grep -q 'runtime[[:space:]]*=[[:space:]]*"python3\.11"' domains/product/infrastructure/terraform/marketing_copy_service.tf \
+                || fail "marketing_copy_service.tf no longer deploys python3.11 - move its trees to the right leg"
+              find domains/product/src/apps/lambda_marketing_copy_api domains/product/src/apps/lambda_marketing_copy_sync -name '*.py' >> "$DEPLOYED_LIST"
+
+              MIN=60
+              ;;
+            3.12)
+              grep -q 'runtime[[:space:]]*=[[:space:]]*"python3\.12"' stacks/apicurio/infrastructure/terraform/authorizer.tf \
+                || fail "apicurio authorizer.tf no longer deploys python3.12 - update this leg"
+              grep -q 'runtime[[:space:]]*=[[:space:]]*"python3\.12"' stacks/beacon/infrastructure/terraform/lambda.tf \
+                || fail "beacon lambda.tf no longer deploys python3.12 - update this leg"
+              echo stacks/apicurio/infrastructure/terraform/authorizer/index.py > "$DEPLOYED_LIST"
+              # Both beacon zips (export Lambdas, API Lambda) are built by
+              # deploy-beacon-dev.yml from these three trees.
+              find stacks/beacon/src/apps/beacon_export stacks/beacon/src/apps/control_panel stacks/beacon/src/libs/dynamic_mapping -name '*.py' >> "$DEPLOYED_LIST"
+              MIN=25
+              ;;
+            3.13)
+              N=$(grep -rhoE 'runtime[[:space:]]*=[[:space:]]*"python3\.13"' --include=*.tf stacks/event/infrastructure/terraform | wc -l)
+              [ "$N" -ge 1 ] || fail "stacks/event no longer declares python3.13 - update this leg"
+              # The event root reads its Lambdas from the release-artifacts
+              # bucket (no archive_file, UIFPE-744); the deployed source set
+              # is defined once, in the lambda_zip calls of
+              # stacks/event/scripts/stage-release-artifacts.sh.
+              grep -E '^lambda_zip ' stacks/event/scripts/stage-release-artifacts.sh \
+                | awk '{for (i = 3; i <= NF; i++) print "stacks/event/" $i}' >> "$DEPLOYED_LIST"
+              MIN=4
+              ;;
+            *) fail "no resolver for ${{ matrix.pyver }} - add a leg deliberately" ;;
+          esac
+
+          sort -u -o "$DEPLOYED_LIST" "$DEPLOYED_LIST"
+          COUNT=$(wc -l < "$DEPLOYED_LIST")
+          echo "Deployed sources at ${{ matrix.pyver }} ($COUNT):"; sed 's/^/  /' "$DEPLOYED_LIST"
+
+          # ANTI-FAIL-OPEN, per leg: a floor, named load-bearing files, and
+          # existence of everything resolved.
+          [ "$COUNT" -ge "$MIN" ] || fail "only $COUNT file(s) resolved for ${{ matrix.pyver }}, expected >= $MIN - a source pattern stopped matching and this leg was about to pass vacuously"
+          case "${{ matrix.pyver }}" in
+            3.9)  MUSTS="stacks/event/src/glue/event_fabric_processor.py
+                    stacks/event/src/glue/event_fabric_recovery.py" ;;
+            3.10) MUSTS="stacks/echo/src/apps/pipeline/silver-reconcile.py" ;;
+            3.11) MUSTS="stacks/echo/src/apps/lambdas/gold_dispatcher.py
+                    stacks/echo/src/apps/pipeline/generic_gold_transform.py
+                    stacks/echo/src/apps/pipeline/gold_cdc.py
+                    stacks/echo/src/libs/gold_frequencies.py
+                    stacks/echo/src/apps/control_panel/pipeline_controller.py
+                    stacks/echo/src/apps/lambdas/scheduler_dispatcher.py
+                    stacks/beacon/src/apps/beacon_export/glue_entrypoint.py
+                    stacks/beacon/src/libs/dynamic_mapping/engine.py" ;;
+            3.12) MUSTS="stacks/apicurio/infrastructure/terraform/authorizer/index.py
+                    stacks/beacon/src/apps/control_panel/api.py" ;;
+            3.13) MUSTS="stacks/event/src/handler.py
+                    stacks/event/src/dlq_recorder.py" ;;
+          esac
+          for must in $MUSTS; do
+            grep -qxF "$must" "$DEPLOYED_LIST" || fail "$must is deployed at ${{ matrix.pyver }} but the resolver did not find it"
+          done
+          while read -r f; do
+            [ -f "$f" ] || fail "$f is named by a deploy definition but does not exist"
+          done < "$DEPLOYED_LIST"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.pyver }}"
+
+      - name: Parse every deployed source at that version
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          python --version
+
+          # SELF-TEST, so a green result cannot mean "the check did not run".
+          # A POSITIVE control first: without it, a missing or broken
+          # interpreter makes every negative control pass for the wrong reason.
+          printf 'x = 1\n' > /tmp/_valid.py
+          python -m py_compile /tmp/_valid.py \
+            || fail "self-test: the interpreter cannot compile a trivially valid file - every check below would have passed for the wrong reason"
+          printf 'def f(:\n' > /tmp/_broken.py
+          if python -m py_compile /tmp/_broken.py 2>/dev/null; then
+            fail "self-test: the interpreter accepted invalid syntax - this gate would pass vacuously"
+          fi
+          # Version-discriminating controls, each self-disabling once the
+          # target reaches the version that legalises the syntax.
+          printf 'x = f"{ 1 +\n 2 }"\n' > /tmp/_pep701.py
+          if python -c 'import sys; sys.exit(0 if sys.version_info < (3, 12) else 1)'; then
+            if python -m py_compile /tmp/_pep701.py 2>/dev/null; then
+              fail "self-test: PEP 701 syntax compiled on $(python -V), which predates 3.12 - wrong interpreter"
+            fi
+            echo "self-test ok: multi-line f-string expressions rejected, as at runtime"
+          else
+            echo "self-test: target is 3.12+, PEP 701 control not applicable"
+          fi
+          printf 'match x:\n    case 1:\n        pass\n' > /tmp/_match.py
+          if python -c 'import sys; sys.exit(0 if sys.version_info < (3, 10) else 1)'; then
+            if python -m py_compile /tmp/_match.py 2>/dev/null; then
+              fail "self-test: a match statement compiled on $(python -V), which predates 3.10 - wrong interpreter"
+            fi
+            echo "self-test ok: match statements rejected, as at runtime"
+          else
+            echo "self-test: target is 3.10+, match control not applicable"
+          fi
+
+          RC=0
+          while read -r f; do
+            python -m py_compile "$f" || { echo "::error file=$f::does not parse on $(python -V) - the runtime this file is deployed to"; RC=1; }
+          done < "$DEPLOYED_LIST"
+          [ "$RC" -eq 0 ] || fail "deployed source(s) do not parse at their runtime version"
+          echo "All deployed sources parse at $(python -V)."
+
+  deployed-python-coverage:
+    name: every deployed runtime has a parse leg
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 6s observed.
+    timeout-minutes: 15
+    # The other half of the fail-closed pair: the matrix legs guard against a
+    # covered runtime MOVING; this job guards against a runtime APPEARING that
+    # no leg covers. A new python3.14 Lambda, a new Glue release, or a new
+    # pythonshell version fails here until a leg is added deliberately -
+    # guessing is how a syntax error reaches production.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diff the estate's runtimes against the matrix
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          COVERED="3.9 3.10 3.11 3.12 3.13"
+
+          ESTATE=$(
+            {
+              grep -rhoE 'runtime[[:space:]]*=[[:space:]]*"python3\.[0-9]+"' --include=*.tf stacks/ domains/ \
+                | grep -oE '3\.[0-9]+'
+              grep -rhoE 'python_version[[:space:]]*=[[:space:]]*"3\.[0-9]+"' --include=*.tf stacks/ domains/ \
+                | grep -oE '3\.[0-9]+'
+              grep -rhoE 'glue_version[[:space:]]*=[[:space:]]*"[0-9]+\.[0-9]+"' --include=*.tf stacks/ domains/ \
+                | grep -oE '[0-9]+\.[0-9]+' | while read -r g; do
+                    case "$g" in
+                      3.0) ;;            # pythonshell-only; its python_version is explicit and caught above
+                      4.0) echo 3.10 ;;
+                      5.0|5.1) echo 3.11 ;;
+                      *) echo "UNKNOWN-GLUE-$g" ;;
+                    esac
+                  done
+            } | sort -uV
+          )
+          echo "Estate runtimes:"; echo "$ESTATE" | sed 's/^/  /'
+          [ -n "$ESTATE" ] || fail "the estate survey found no runtimes at all - the patterns are broken, not the estate"
+
+          RC=0
+          for v in $ESTATE; do
+            case "$v" in
+              UNKNOWN-GLUE-*) echo "::error::${v#UNKNOWN-GLUE-} is not in the Glue release->CPython map. Look up which CPython it runs and extend the map AND the matrix deliberately."; RC=1 ;;
+              *) case " $COVERED " in
+                   *" $v "*) echo "ok  $v is covered by a matrix leg" ;;
+                   *) echo "::error::CPython $v is deployed somewhere in stacks/ or domains/ and NO matrix leg parses at it. Add a leg to deployed-python deliberately."; RC=1 ;;
+                 esac ;;
+            esac
+          done
+          exit "$RC"
+
+  security-scan-sca:
+    name: security scan — SCA (${{ matrix.stack }})
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]'
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 55s observed on apicurio.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same probe the `ci` job runs, repeated rather than shared. A job
+      # output cannot carry it: `ci` is a matrix job, and matrix legs all write
+      # to one set of job outputs, so reading `ci`'s toolchain outputs here
+      # would give whichever leg finished last.
+      #
+      # THIS PROBE ASKS A DIFFERENT QUESTION FROM `ci`'s, deliberately. `ci`
+      # asks "is there Python here for a test gate to run" (which includes a
+      # bare .py under qe/); this one asks "is there a dependency MANIFEST for
+      # Snyk to resolve" - a pyproject, or any requirements*.txt outside
+      # node_modules. The requirements clause was an open posture question under
+      # UIFPE-469 and is a taken decision under UIFPE-489 (owner, 2026-09-21):
+      # echo's and beacon's Python dependency trees enter Snyk rather than being
+      # excluded from it. What forced it: on develop pushes (do_not_monitor is
+      # false there) `snyk monitor --all-projects` finds src/requirements.txt,
+      # cannot resolve it against an environment nothing installed, and fails
+      # the job with "1/N potential projects failed to get dependencies" - a
+      # scan error reading as a security failure, while pull requests of the
+      # identical tree pass because the monitor phase is PR-skipped. The SAST
+      # copy below deliberately keeps the pyproject-only probe: SAST scans
+      # first-party source and resolves no manifests, so the manifest question
+      # does not apply to it - its python output only gates an install Snyk
+      # Code never needs.
+      - name: Probe the stack's toolchains
+        id: toolchain
+        working-directory: stacks/${{ matrix.stack }}
+        run: |
+          set -uo pipefail
+          emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "  $1=$2"; }
+          # A manifest Snyk will pick up with --all-projects: a packaged src/,
+          # or any requirements file. Same node_modules guard as the `ci` job -
+          # an npm package shipping a requirements.txt must not turn this on.
+          if [ -f src/pyproject.toml ] \
+             || [ -n "$(find . -name 'requirements*.txt' -not -path '*/node_modules/*' -print -quit)" ]; then
+            emit python true
+          else
+            emit python false
+          fi
+          [ -f ui/package.json ]    && emit node   true || emit node   false
+
+      - uses: actions/setup-python@v5
+        if: steps.toolchain.outputs.python == 'true'
+        with:
+          python-version: "3.12"
+
+      # Dependencies are installed BEFORE the scan on purpose. Snyk SCA
+      # resolves vulnerabilities against *installed* packages (site-packages,
+      # node_modules), not just the manifest — a tree with pyproject.toml and
+      # nothing installed produces a false "missing packages" failure rather
+      # than a clean report.
+      #
+      # Deliberately NOT `continue-on-error`, which is how the pattern is
+      # usually written. There the tolerance exists because the paths are
+      # guessed; here the probe above has already established the manifest
+      # exists, so a failed install is a real breakage. Swallowing it would
+      # hand Snyk an empty environment and produce exactly the misleading
+      # result the install step exists to prevent — the same reasoning the
+      # `ci` job states for not passing --allow-missing-tools.
+      - name: Install Python dependencies (SCA resolves against installed packages)
+        if: steps.toolchain.outputs.python == 'true'
+        working-directory: stacks/${{ matrix.stack }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          # uv, because Snyk runs with --all-projects and a packaged stack
+          # (apicurio) ships a src/uv.lock. Without the binary on PATH, Snyk reported
+          #   src/uv.lock: uv binary not found in PATH
+          #   1/2 potential projects failed to get dependencies
+          # and scanned the npm project only -- so the Python dependency tree
+          # was never scanned at all, while the job still reported an SCA
+          # result. Half a scan presented as a scan is the failure mode this
+          # repo's own gates keep warning about.
+          #
+          # Pinned for the same reason ruff is above: resolution behaviour
+          # changes between releases, and an unpinned resolver changes a run's
+          # verdict with no commit.
+          python -m pip install --quiet 'uv==0.12.16'
+          # A packaged stack installs itself; one without a pyproject declares
+          # its dependencies in requirements files instead - the same
+          # stack-declares-its-deps branch the `ci` job runs (UIFPE-469), here
+          # so snyk test AND snyk monitor can resolve src/requirements.txt
+          # instead of failing the push-only monitor phase (UIFPE-489).
+          if [ -f src/pyproject.toml ]; then
+            python -m pip install --quiet -e src/
+          else
+            found=0
+            while IFS= read -r req; do
+              echo "  pip install -r $req"
+              python -m pip install --quiet -r "$req"
+              found=1
+            done < <(find . -name 'requirements*.txt' -not -path '*/node_modules/*' | sort)
+            if [ "$found" -eq 0 ]; then
+              echo "  no pyproject.toml and no requirements*.txt - nothing to install"
+            fi
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.toolchain.outputs.node == 'true'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: stacks/${{ matrix.stack }}/ui/package-lock.json
+
+      - name: Install Node dependencies (SCA resolves against installed packages)
+        if: steps.toolchain.outputs.node == 'true'
+        working-directory: stacks/${{ matrix.stack }}/ui
+        run: npm ci
+
+      # `working_directory` scopes the scan to the matrixed stack, which is
+      # what keeps this stack-generic instead of hardcoding one stack's paths.
+      #
+      # `language` is intentionally NOT passed. The action auto-detects only
+      # when this input is EMPTY; a non-empty value takes the
+      # "user explicitly specified a language" branch, and a value that is not
+      # one of its known package managers (golang/maven/gradle/npm/yarn/pnpm/
+      # pip/pipenv/poetry/uv/composer/sbt/rubygems/nuget) silently degrades to
+      # `--all-projects` with a misleading "using user-specified language" log.
+      # In particular `language: "auto"` is not a real value — the internal
+      # notes that suggest it are wrong. Omitting it runs the documented
+      # auto-detect path, which for a stack root holding no manifest of its own
+      # resolves to `--all-projects` and so picks up BOTH src/pyproject.toml
+      # and ui/package.json. That is the behaviour we want for a two-language
+      # stack; naming a single language would scan one and miss the other.
+      #
+      # `artifact_prefix` carries the stack name because the action names its
+      # uploaded artifact "<artifact_prefix>-<scan_type>". With a matrix, a
+      # constant prefix would make every leg upload "snyk-sca-SCA" and
+      # upload-artifact rejects the duplicate name, failing the run.
+      #
+      # Skipped for a stack with neither manifest (harbor today): the action
+      # hard-fails when Snyk cannot produce parseable results, which a tree
+      # with no dependency manifest at all would trigger. Same
+      # "scaffold-only stays green and says so" posture as the two gates above.
+      - name: Snyk SCA
+        if: steps.toolchain.outputs.python == 'true' || steps.toolchain.outputs.node == 'true'
+        uses: pearson-adm-gitworks/action-security-scan@v24
+        with:
+          snyk_token: ${{ secrets.GWKS_SNYK_TOKEN }}
+          scan_type: "SCA"
+          scan_threshold: "high"
+          working_directory: stacks/${{ matrix.stack }}
+          # Report to snyk.io only on push to main; a pull request scans without
+          # creating a monitored project per branch.
+          do_not_monitor: ${{ github.event_name == 'pull_request' }}
+          artifact_prefix: "snyk-sca-${{ matrix.stack }}"
+
+      - name: Snyk SCA (no dependency manifest)
+        if: steps.toolchain.outputs.python != 'true' && steps.toolchain.outputs.node != 'true'
+        run: |
+          echo "::notice::stacks/${{ matrix.stack }} has no dependency manifest (no src/pyproject.toml, no requirements*.txt) and no ui/package.json — no dependencies to scan. SCA skipped; this is not a compliance pass."
+
+  # WHY THIS JOB'S TIMEOUT IS THE ONE THAT MATTERS, and why 20 minutes.
+  #
+  # On 2026-09-21 the vendor action hung in its `Snyk SAST` step on two
+  # independent runs at once -- one of them on develop -- from roughly 14:31
+  # onward. Neither ever produced a line of output, and with no timeout on the
+  # job they sat in_progress for over an hour, heading for GitHub's 6-hour
+  # ceiling. A run that hangs indefinitely is worse than one that fails: the
+  # gate below `needs` this job, so a hang stalls the gate, and
+  # release-apicurio.yml polls that gate for a bounded 30 minutes before
+  # giving up. An unbounded hang therefore burns a release cycle and leaves no
+  # log to read, because job logs are not retrievable until the job ends.
+  #
+  # 20 minutes is ~2x the 10m27s a real apicurio SAST scan takes (run
+  # 35611404410), and it deliberately fits INSIDE release-apicurio.yml's
+  # 30-minute poll, so a hung scan now fails the gate while that workflow is
+  # still watching rather than after it has already given up.
+  #
+  # This does not make a hung scan pass -- a timeout converts an indefinite
+  # hang into a failed gate, which still blocks a release. What it buys is a
+  # bounded wait, a retrievable log, and a red signal instead of a grey one.
+  security-scan-sast:
+    name: security scan — SAST (${{ matrix.stack }})
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]'
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 10m27s observed on apicurio -- see the note above this job.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # SAST reads source, so it needs no dependency install — but it still
+      # needs something to read. Reusing the SCA probe's predicates as the
+      # "does this stack have first-party code" test: Python and Node are the
+      # only languages any stack here ships, and a stack with neither manifest
+      # is scaffold-only.
+      - name: Probe the stack's toolchains
+        id: toolchain
+        working-directory: stacks/${{ matrix.stack }}
+        run: |
+          set -uo pipefail
+          emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "  $1=$2"; }
+          [ -f src/pyproject.toml ] && emit python true || emit python false
+          [ -f ui/package.json ]    && emit node   true || emit node   false
+
+      # Threshold is `critical` for SAST against `high` for SCA, and
+      # do_not_monitor is unconditionally true — static findings are not
+      # tracked as a monitored project the way a dependency tree is.
+      - name: Snyk SAST
+        if: steps.toolchain.outputs.python == 'true' || steps.toolchain.outputs.node == 'true'
+        uses: pearson-adm-gitworks/action-security-scan@v24
+        with:
+          snyk_token: ${{ secrets.GWKS_SNYK_TOKEN }}
+          scan_type: "SAST"
+          scan_threshold: "critical"
+          working_directory: stacks/${{ matrix.stack }}
+          do_not_monitor: true
+          artifact_prefix: "snyk-sast-${{ matrix.stack }}"
+
+      - name: Snyk SAST (no first-party code)
+        if: steps.toolchain.outputs.python != 'true' && steps.toolchain.outputs.node != 'true'
+        run: |
+          echo "::notice::stacks/${{ matrix.stack }} ships no Python or Node source — SAST skipped; this is not a compliance pass."
+
+  # ---------------------------------------------------------------------------
+  # SIF base-image validation — ADVISORY, not blocking.
+  #
+  # WHY ADVISORY. Pearson's own pipeline runs this check advisory-only ("will
+  # become blocking per ADR-0004"), and this repo is not yet in a position to
+  # block on it: no Dockerfile under stacks/ is on a SIF base. The only one is
+  # stacks/apicurio/src/Dockerfile, and it is deliberately being moved onto a
+  # public Alpine base first, to prove the Alpine/musl rewrite independently —
+  # pulling the real SIF image needs a VPN-only portal lookup and a mirror that
+  # nobody has created yet. A blocking check would therefore be red on day one
+  # for a reason already known and already sequenced, which trains people to
+  # ignore it.
+  #
+  # TO MAKE IT BLOCKING: delete the `continue-on-error: true` line below. The
+  # script's exit codes are already truthful — it exits non-zero on a
+  # violation — so that one line is the whole switch. Do it once the SIF image
+  # has been mirrored (see the mirror runbook in stacks/apicurio/DEPLOY-DEV.md)
+  # and src/Dockerfile's FROM points at the mirror.
+  #
+  # WHAT IT ACCEPTS. Either the SIF registry itself, or the specific mirror
+  # repository path — because those two are in tension and both have to hold.
+  # SIF lives in a different AWS account AND a different region from ours, and
+  # cross-account ECR pull from GitHub Actions 401s without a resource policy
+  # on the SIF repo, so the supported route is to mirror the SIF image into our
+  # own ECR. Once mirrored, the FROM line no longer starts with the SIF
+  # registry even though the image is SIF-derived. The allowance is scoped to
+  # the mirror's repository PATH, not to our account: an arbitrary repo in our
+  # own registry is not SIF-derived and is still rejected. The guard below
+  # refuses a mirror prefix that names only a registry host, since that would
+  # quietly turn this into "any image in our account passes".
+  #
+  # Both addresses come from repository/org variables, never hardcoded here.
+  #   vars.SIF_REGISTRY       322587279590.dkr.ecr.eu-west-2.amazonaws.com  (set)
+  #   vars.SIF_MIRROR_PREFIX  283556840805.dkr.ecr.eu-west-1.amazonaws.com/apicurio-base/  (not set yet — no mirror exists)
+  # SIF_REGISTRY is configured today, so the skip path below is currently
+  # unreachable. It stays anyway: it is the correct behaviour in a fork or a
+  # fresh clone where the variable is absent, and it should exist before
+  # someone deletes the variable rather than after. An unset SIF_REGISTRY makes
+  # the job report SKIPPED and say in as many words that it is not a pass — a
+  # check that goes green because its configuration is empty is worse than no
+  # check.
+  #
+  # KNOWN VIOLATIONS. Because the variable is set and nothing is on a SIF base
+  # yet, this check reports a violation on stacks/apicurio/src/Dockerfile on
+  # every single run. That is expected and tracked, not news. Left
+  # undifferentiated it would be pure cry-wolf, and the next REAL violation
+  # would land in a list people have already learned to scroll past — so the
+  # script classifies each violation against KNOWN_VIOLATIONS below: known ones
+  # are reported as notices, anything else as an error annotation. The known
+  # list is a visibility aid, not a suppression — every entry still counts
+  # toward the failure count and the exit code, and the list must be EMPTY
+  # before this check is flipped to blocking.
+  # ---------------------------------------------------------------------------
+  validate-sif:
+    name: validate SIF base images (${{ matrix.stack }})
+    needs: detect
+    if: needs.detect.outputs.stacks != '[]'
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 7s observed.
+    timeout-minutes: 10
+    continue-on-error: true   # ADVISORY — delete this line to make it blocking
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.detect.outputs.stacks) }}
+    env:
+      SIF_REGISTRY: ${{ vars.SIF_REGISTRY }}
+      SIF_MIRROR_PREFIX: ${{ vars.SIF_MIRROR_PREFIX }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check FROM lines against the SIF registry (or its approved mirror)
+        run: |
+          set -euo pipefail
+          STACK_DIR="stacks/${{ matrix.stack }}"
+          summary() { echo "$*" >> "$GITHUB_STEP_SUMMARY"; }
+
+          # Dockerfiles already known NOT to be on a SIF base, with the reason.
+          # These are still counted and still fail the script; listing them only
+          # separates "already tracked" from "new regression" in the output.
+          # Empty this list before making the job blocking.
+          KNOWN_VIOLATIONS="stacks/apicurio/src/Dockerfile"
+          KNOWN_REASON="tracked: on a public Alpine base while the Alpine/musl rewrite is proven; needs the SIF image mirrored first — see stacks/apicurio/DEPLOY-DEV.md"
+
+          # Guard 1 — unconfigured means SKIPPED, never PASSED.
+          if [ -z "${SIF_REGISTRY:-}" ]; then
+            echo "::warning::SIF validation SKIPPED for $STACK_DIR — vars.SIF_REGISTRY is unset. This is NOT a pass."
+            summary "### SIF base images (${{ matrix.stack }}): SKIPPED — not a pass"
+            summary ""
+            summary "\`vars.SIF_REGISTRY\` is unset, so there is nothing to compare \`FROM\` lines against."
+            summary "Expected value: \`322587279590.dkr.ecr.eu-west-2.amazonaws.com\`"
+            exit 0
+          fi
+
+          # Guard 2 — a mirror allowance must name a repository path, not just
+          # an account's registry host. Without a path component, every image
+          # in that account would pass and this check would be hollow.
+          MIRROR="${SIF_MIRROR_PREFIX:-}"
+          if [ -n "$MIRROR" ] && ! printf '%s' "$MIRROR" | grep -qE '^[^/]+/.+'; then
+            echo "::warning::Ignoring vars.SIF_MIRROR_PREFIX='$MIRROR' — it names a registry host with no repository path, which would let any image in that account pass. Use e.g. <account>.dkr.ecr.<region>.amazonaws.com/apicurio-base/"
+            MIRROR=""
+          fi
+
+          echo "SIF registry:  $SIF_REGISTRY"
+          echo "Mirror prefix: ${MIRROR:-<none configured>}"
+          echo "Scanning:      $STACK_DIR"
+
+          CHECKED=0
+          KNOWN_HITS=()
+          NEW_HITS=()
+          UNRESOLVED=()
+          SEEN=""
+          while IFS= read -r DFILE; do
+            # shellcheck disable=SC2094  # the ARG lookup below re-reads $DFILE while this loop reads it; both are reads, nothing writes it
+            while IFS= read -r line; do
+              [[ "$line" =~ ^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]] ]] || continue
+              # Strip FROM and any flags (--platform=..., --from=...).
+              image=$(printf '%s' "$line" \
+                | sed -E 's/^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+(--[a-zA-Z-]+=[^[:space:]]+[[:space:]]+)*//' \
+                | awk '{print $1}')
+              [ "$image" = "scratch" ] && continue
+
+              # Resolve a parameterised base image against an ARG default in
+              # the same Dockerfile.
+              #
+              # `ARG BASE_IMAGE=... ` + `FROM ${BASE_IMAGE}` is the shape
+              # apicurio's Dockerfile actually uses, and it is the one that
+              # quietly defeats a naive check: the literal string
+              # "${BASE_IMAGE}" holds no dot or slash, so the registry-
+              # reference test below skips it and the job then reports
+              # "0 images checked" — a vacuous pass over the one Dockerfile
+              # this check exists for. Resolving the default is the honest
+              # read: no --build-arg overrides BASE_IMAGE anywhere in this
+              # repo, so the default IS the image the build uses.
+              #
+              # Bounded loop, because an ARG default may itself reference
+              # another ARG, and a self-referential one must not spin.
+              hops=0
+              while [ "$hops" -lt 5 ]; do
+                case "$image" in *'$'*) ;; *) break ;; esac
+                vname=$(printf '%s' "$image" | sed -nE 's/.*\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?.*/\1/p')
+                [ -n "$vname" ] || break
+                adef=$(sed -nE "s/^[[:space:]]*[Aa][Rr][Gg][[:space:]]+$vname=(.*)\$/\1/p" "$DFILE" | tail -n 1)
+                adef="${adef%\"}"; adef="${adef#\"}"
+                adef="${adef%\'}"; adef="${adef#\'}"
+                [ -n "$adef" ] || break
+                image="${image//\$\{$vname\}/$adef}"
+                image="${image//\$$vname/$adef}"
+                hops=$((hops + 1))
+              done
+
+              # Still holding a variable reference: the base image is chosen at
+              # build time and cannot be validated from the source tree. That
+              # is NOT a pass — report it so it cannot hide as a skip.
+              case "$image" in
+                *'$'*)
+                  UNRESOLVED+=("$DFILE: FROM $image (no ARG default in this file)")
+                  continue
+                  ;;
+              esac
+              # A bare word (FROM builder) references an earlier build stage in
+              # the same file, not a registry — nothing to validate.
+              printf '%s' "$image" | grep -qE '[./]' || continue
+              # Multi-stage files repeat the same base image; count it once.
+              case "$SEEN" in
+                *"|$DFILE=$image|"*) continue ;;
+              esac
+              SEEN="$SEEN|$DFILE=$image|"
+              CHECKED=$((CHECKED + 1))
+              if [ "${image#"$SIF_REGISTRY"/}" != "$image" ]; then
+                echo "  ok (SIF)     $DFILE: $image"
+              elif [ -n "$MIRROR" ] && [ "${image#"$MIRROR"}" != "$image" ]; then
+                # SIF-derived mirror — see the mirror runbook in
+                # stacks/apicurio/DEPLOY-DEV.md.
+                echo "  ok (mirror)  $DFILE: $image"
+              elif [[ " $KNOWN_VIOLATIONS " == *" $DFILE "* ]]; then
+                KNOWN_HITS+=("$DFILE: FROM $image")
+              else
+                NEW_HITS+=("$DFILE: FROM $image")
+              fi
+            done < "$DFILE"
+          done < <(find "$STACK_DIR" -name Dockerfile -not -path '*/node_modules/*')
+
+          # Guard 3 — nothing examined is not the same as nothing wrong. Say
+          # the count so "0 checked" can never read as a compliance pass.
+          if [ "$CHECKED" -eq 0 ] && [ ${#UNRESOLVED[@]} -eq 0 ]; then
+            echo "::notice::No Dockerfile with an external FROM under $STACK_DIR — 0 base images checked. Nothing to validate; this is not a compliance pass."
+            summary "### SIF base images (${{ matrix.stack }}): nothing to check"
+            summary ""
+            summary "0 external \`FROM\` lines found under \`$STACK_DIR\`."
+            exit 0
+          fi
+
+          TOTAL=$(( ${#KNOWN_HITS[@]} + ${#NEW_HITS[@]} + ${#UNRESOLVED[@]} ))
+
+          if [ "$TOTAL" -eq 0 ]; then
+            echo "All $CHECKED base image(s) under $STACK_DIR reference the SIF registry or its approved mirror."
+            summary "### SIF base images (${{ matrix.stack }}): $CHECKED checked, all compliant"
+            exit 0
+          fi
+
+          # New violations get error annotations; already-tracked ones get
+          # notices, so a regression is not buried in expected noise.
+          if [ ${#NEW_HITS[@]} -gt 0 ]; then
+            for v in "${NEW_HITS[@]}"; do
+              echo "::error::NEW non-SIF base image (advisory, but not a tracked exception) — $v"
+            done
+          fi
+          if [ ${#UNRESOLVED[@]} -gt 0 ]; then
+            for v in "${UNRESOLVED[@]}"; do
+              echo "::error::base image not determinable from the source tree — $v"
+            done
+          fi
+          if [ ${#KNOWN_HITS[@]} -gt 0 ]; then
+            for v in "${KNOWN_HITS[@]}"; do
+              echo "::notice::known non-SIF base image — $v ($KNOWN_REASON)"
+            done
+          fi
+
+          summary "### SIF base images (${{ matrix.stack }}): $TOTAL finding(s) across $CHECKED checked — ADVISORY"
+          summary ""
+          if [ ${#NEW_HITS[@]} -gt 0 ]; then
+            summary "**New — not a tracked exception, look at these:**"
+            for v in "${NEW_HITS[@]}"; do summary "- \`$v\`"; done
+            summary ""
+          fi
+          if [ ${#UNRESOLVED[@]} -gt 0 ]; then
+            summary "**Not determinable — base image comes from a build argument with no default, so it cannot be validated from source:**"
+            for v in "${UNRESOLVED[@]}"; do summary "- \`$v\`"; done
+            summary ""
+          fi
+          if [ ${#KNOWN_HITS[@]} -gt 0 ]; then
+            summary "**Known and tracked — expected on every run until the mirror exists:**"
+            for v in "${KNOWN_HITS[@]}"; do summary "- \`$v\` — $KNOWN_REASON"; done
+            summary ""
+          fi
+          summary "Advisory while the SIF image is unmirrored. Becomes blocking once the mirror exists and the known list is empty — see the comment above this job in \`.github/workflows/stacks-ci.yml\`."
+          exit 1
+
+  # ── The one required status check for this workflow ──────────────────────────
+  #
+  # WHY AN AGGREGATOR AND NOT THE JOBS THEMSELVES. Branch protection requires a
+  # check by NAME, and every blocking job above is a matrix leg named
+  # "ci (apicurio)", "security scan — SCA (echo)" and so on. Requiring those
+  # directly does not work in a monorepo: a leg only exists when its stack is
+  # touched, and a required context that never reports leaves the pull request
+  # waiting for a check that will never arrive. So one job, always present,
+  # reports the verdict for all of them -- and THIS is the name to require on
+  # develop.
+  #
+  # It also closes the failure mode that made this file worth fixing. Between
+  # 2026-09-15 and 2026-09-18 one disallowed action failed every job here at
+  # startup for 39 consecutive runs, and not one merge was blocked, because no
+  # check in this file was required. A startup failure does not run this job
+  # either -- so with this required, that outage blocks the merge instead of
+  # passing quietly for three days.
+  #
+  # ADDING A BLOCKING JOB? Add it to `needs` AND to the loop below. A job
+  # missing from both is a job nothing enforces.
+  #
+  # WHAT IS DELIBERATELY NOT LISTED: validate-sif. It carries
+  # `continue-on-error: true` and is advisory by design until the SIF mirror
+  # exists (see its own comment). Listing it here would silently promote it to
+  # blocking, which is a policy change and belongs in its own commit, with the
+  # known-violations list empty.
+  gate:
+    name: stacks-ci gate
+    needs: [detect, ci, deployed-python, deployed-python-coverage, security-scan-sca, security-scan-sast]
+    if: always()
+    runs-on: ubuntu-latest
+    # Bounded so a hung step fails instead of burning to GitHub's 6-hour
+    # job ceiling. 3s observed.
+    timeout-minutes: 10
+    steps:
+      - name: Require every blocking job to have passed
+        env:
+          DETECT: ${{ needs.detect.result }}
+          CI: ${{ needs.ci.result }}
+          DEPLOYED_PYTHON: ${{ needs.deployed-python.result }}
+          DEPLOYED_PYTHON_COVERAGE: ${{ needs.deployed-python-coverage.result }}
+          SCA: ${{ needs.security-scan-sca.result }}
+          SAST: ${{ needs.security-scan-sast.result }}
+        run: |
+          set -euo pipefail
+          rc=0
+          # 'skipped' is a pass: it means the pull request touched no stack, so
+          # the matrix was empty. 'failure' and 'cancelled' are not. An empty
+          # result is treated as a failure rather than assumed green.
+          for pair in "detect:$DETECT" "ci:$CI" \
+                      "deployed-python:$DEPLOYED_PYTHON" \
+                      "deployed-python-coverage:$DEPLOYED_PYTHON_COVERAGE" \
+                      "security-scan-sca:$SCA" "security-scan-sast:$SAST"; do
+            job="${pair%%:*}"; res="${pair#*:}"
+            case "$res" in
+              success|skipped) echo "ok       $job ($res)" ;;
+              *)               echo "::error::$job did not pass — result: ${res:-<none>}"; rc=1 ;;
+            esac
+          done
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Stacks CI gate failed. If every job above reads '<none>' the run did not start at all — read the run's own error rather than the job logs, and check every 'uses:' in this file against the enterprise Actions policy."
+            exit 1
+          fi
+          echo "all blocking stack jobs passed"

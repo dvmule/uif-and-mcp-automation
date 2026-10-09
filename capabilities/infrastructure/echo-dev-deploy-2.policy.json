@@ -1,0 +1,203 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Secrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:echo-dev-*",
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:uif-*-dev*",
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:events!connection/echo-dev-*",
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:events!connection/uif-*-dev*"
+      ]
+    },
+    {
+      "Sid": "StackBuckets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:Get*",
+        "s3:PutBucketTagging",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutLifecycleConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:s3:::echo-dev-*",
+        "arn:aws:s3:::uif-echo-dev-*"
+      ]
+    },
+    {
+      "Sid": "StackBucketObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:GetObjectTagging",
+        "s3:PutObjectTagging",
+        "s3:GetObjectAcl",
+        "s3:GetObjectAttributes",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": [
+        "arn:aws:s3:::echo-dev-*/*",
+        "arn:aws:s3:::uif-echo-dev-*/*"
+      ]
+    },
+    {
+      "Sid": "MetricAlarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+        "cloudwatch:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:cloudwatch:eu-west-1:283556840805:alarm:echo-dev-*",
+        "arn:aws:cloudwatch:eu-west-1:283556840805:alarm:uif-*-dev*"
+      ]
+    },
+    {
+      "Sid": "StackRoleLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:GetRole",
+        "iam:UpdateRole",
+        "iam:DeleteRole",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRoleTags",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::283556840805:role/echo-dev-*",
+        "arn:aws:iam::283556840805:role/uif-*-dev*"
+      ]
+    },
+    {
+      "Sid": "PassRoleToStackServices",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::283556840805:role/echo-dev-*",
+        "arn:aws:iam::283556840805:role/uif-*-dev*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "ecs-tasks.amazonaws.com",
+            "lambda.amazonaws.com",
+            "states.amazonaws.com",
+            "codebuild.amazonaws.com",
+            "pipes.amazonaws.com",
+            "events.amazonaws.com",
+            "glue.amazonaws.com",
+            "transfer.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "UnscopableReads",
+      "Effect": "Allow",
+      "Action": [
+        "kinesis:ListStreams",
+        "cloudwatch:DescribeAlarms",
+        "iam:ListOpenIDConnectProviders",
+        "iam:GetOpenIDConnectProvider"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "GoldDatabaseLfTagging",
+      "Effect": "Allow",
+      "Action": [
+        "lakeformation:GetResourceLFTags",
+        "lakeformation:AddLFTagsToResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ServiceLinkedRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "events.amazonaws.com",
+            "pipes.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TransferConnectors",
+      "Effect": "Allow",
+      "Action": [
+        "transfer:DescribeConnector",
+        "transfer:UpdateConnector",
+        "transfer:DeleteConnector",
+        "transfer:TagResource",
+        "transfer:UntagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": [
+            "beacon",
+            "echo"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TransferConnectorCreate",
+      "Effect": "Allow",
+      "Action": "transfer:CreateConnector",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": [
+            "beacon",
+            "echo"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "TransferConnectorList",
+      "Effect": "Allow",
+      "Action": "transfer:ListConnectors",
+      "Resource": "*"
+    }
+  ]
+}

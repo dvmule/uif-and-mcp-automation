@@ -1,0 +1,350 @@
+# Product retrieval API (UIFPE-739) — the registered contract for the gold
+# product entity.
+#
+# Contract-first per capabilities/api/guidelines.md. The response schema is NOT
+# restated here: it $refs ../../schemas/channels/product/product-data-api-created.json,
+# the generated api-tier projection of
+# domains/product/src/schemas/gold/product/v1/master.json. That is the rule
+# UIFPE-524 established — a hand-authored copy of a generated schema is a
+# restatement, and the two drift silently. This contract restated 71
+# properties against a generated 60 for weeks, flattening one nested object
+# into twelve dotted names, and nothing noticed.
+#
+# THE KEY A CALLER USES IS NOT THE KEY THE TABLE MERGES ON. Gold merges product
+# on the Oracle surrogate pair (inventoryItemId, organizationId), because CDC
+# cannot express the business key on every source. Both surrogates carry
+# `x-channels: []`, so no UIF surface publishes them and no consumer can learn
+# them. The addressable key is (productId, organizationCode), which UIFPE-709
+# made readable through the serving copy's business-key index. Measured on dev
+# 2026-09-30: 1,903,755 rows, 1,903,755 distinct pairs, zero collisions.
+#
+# BOTH READS ARE BOUNDED. capabilities/api/guidelines.md is unconditional about
+# never returning an unbounded list, and the two operations this contract
+# replaced — a bare GET /products and a POST /products/query — were unbounded
+# over 1.9M rows and were never implemented. The collection read below pages,
+# and a product is carried by a handful of organizations in practice (a median
+# of 6, a maximum of 20 measured on dev 2026-09-30) — but the page is the
+# contract, not the handful.
+#
+# Security, stated honestly. TWO hops, and only the first is a consumer
+# concern:
+#
+#   consumer -> gateway    EntraID, the scheme below. The gateway owns it
+#                          (owner decision 2026-09-03).
+#   gateway  -> function   a Pearson Identity (IES) bearer token the gateway
+#                          injects, which this backend verifies and pins to an
+#                          allow-listed subject (owner decision 2026-10-01).
+#
+# The second hop is deliberately NOT a scheme here, for the same reason the
+# gateway's shared header is not: a consumer never mints or sees that token,
+# and declaring it would tell them to send something they do not have. It
+# surfaces only as a 401 or 403 to a caller who reaches the function url
+# directly and bypasses the gateway — which is exactly what it exists to stop,
+# because that url is reachable.
+openapi: 3.1.0
+info:
+  title: Product API
+  # 3.0.0, and the major is not optional. Two operations are gone, the
+  # response shape changes from a restated 71-property schema to the generated
+  # 60-property projection, and the addressable key changes. That is breaking
+  # several times over under a BACKWARD registry rule. Taken now precisely
+  # BECAUSE nothing consumes it yet — the same reasoning stock's 2.0.0 rests on.
+  version: 3.0.0
+  description: >
+    Returns a product's attributes as one fulfillment organization holds them.
+    One read addresses a single organization; the other pages through every
+    organization carrying that product. Responses are cacheable — honour ETag
+    and Cache-Control.
+  contact:
+    name: Enterprise Data Connect
+    email: reyasahamed.habibrahman@pearson.com
+# Apicurio registry coordinate — stacks/apicurio/standards/guidelines.md §1,
+# stacks/apicurio/standards/apicurio-governance.md.
+x-registry:
+  group: product
+  artifact: product-api
+  compatibility: BACKWARD
+# Product is served from the SHARED gold serving copy, so its promise is the
+# shared retrieval function's, identical to price, program and stock.
+# stacks/echo/qe/gold/test_gold_serving_api.py holds every served contract to
+# the same four numbers — a contract publishing different figures would be
+# promising something the alarms do not watch.
+x-slo:
+  latencyP50Milliseconds: 20
+  latencyP99Milliseconds: 1300
+  availabilityPercent: 99.9
+  freshnessHours: 36
+  notes:
+    latency: >
+      The shared function's numbers, measured on dev 2026-09-28 against price
+      (warm p50 5.2 ms, warm p99 12.4 ms, cold start 1,091 ms typical and
+      1,211 ms worst). Product's own serving copy was filled on 2026-09-30 and
+      its reads verified, but its latency has not been measured separately —
+      and its items are wider than price's, so treat these as the function's
+      figures rather than product's. Cold starts are accepted rather than
+      removed with provisioned concurrency (owner decision 2026-09-28).
+    availability: >
+      Single region, no failover. Enforced by the shared retrieval function's
+      Errors and Throttles alarms.
+    freshness: >
+      36 hours, which is 1.5x the daily pipeline cadence and the figure the
+      per-entity FreshnessBreached alarm actually fires on. A product read can
+      therefore be a day and a half old.
+tags:
+  - name: product
+    description: Gold product attributes by product and fulfillment organization.
+servers:
+  - url: https://api1-dev.pearson.com/uif/v1
+    description: dev (Mule gateway)
+  - url: https://api1-stg.pearson.com/uif/v1
+    description: uat (Mule gateway)
+  - url: https://api1-us1.pearson.com/uif/v1
+    description: prod (Mule gateway)
+security:
+  - EntraID: [api://product-api/product.read]
+paths:
+  /product/{productId}/organization/{organizationCode}:
+    get:
+      operationId: getProductByProductAndOrganization
+      tags: [product]
+      summary: One product as one organization holds it
+      description: >
+        The canonical single read. Resolves to exactly one item, which is why
+        the path segments are singular. Note that `organization` here names
+        organizationCode, the published code — passing the Oracle
+        organizationId misses rather than resolving, because the index is
+        built from the code.
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/OrganizationCode"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: The product's attributes for that organization.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "../../schemas/channels/product/product-data-api-created.json"
+        "304":
+          description: Not modified — the cached representation is current.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: >
+            No product row for that product and organization. A product that
+            exists in other organizations but not this one is also a 404.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "4XX":
+          $ref: "#/components/responses/OtherClientError"
+        "5XX":
+          $ref: "#/components/responses/OtherServerError"
+
+  /product/{productId}:
+    get:
+      operationId: getProductByProduct
+      tags: [product]
+      summary: One product in every organization carrying it
+      description: >
+        Every organization holding the product, one page at a time. In practice
+        a product is carried by a handful of organizations and the first page is
+        the whole answer — but the page is the contract, not the handful, so a
+        product that grows an unusual number of organizations is served rather
+        than timing out. This is not a bulk export, and there is no filter
+        parameter until a named consumer brings one.
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: >
+            One page of organizations. Follow nextCursor until it is null —
+            never stop on a short page, because a page ends at whichever comes
+            first, pageSize or the store's own 1 MB page limit, so fewer items
+            than pageSize does not mean the last page. Product's items are wide
+            enough that this matters: a page can hold very few of them. An
+            empty items array appears only when a cursor has been walked to its
+            end; an unknown product is a 404.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductPage"
+        "304":
+          description: Not modified — the cached representation is current.
+        "400":
+          description: >
+            pageSize outside 1..100, or a cursor that is unreadable or was
+            issued for a different product.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown product.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "4XX":
+          $ref: "#/components/responses/OtherClientError"
+        "5XX":
+          $ref: "#/components/responses/OtherServerError"
+
+components:
+  securitySchemes:
+    EntraID:
+      type: openIdConnect
+      openIdConnectUrl: https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration
+
+  parameters:
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 64
+      description: >
+        Pearson product identifier. The same value the gold product row and its
+        change events carry. Not the Oracle inventoryItemId, which no channel
+        publishes.
+    OrganizationCode:
+      name: organizationCode
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 32
+      description: >
+        Fulfillment organization code — the published code, not the Oracle
+        organizationId. The two are different values for the same organization
+        and only the code is addressable.
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+      description: >
+        Maximum items per page. The same bounds every gold entity API declares,
+        so one paging convention covers them all.
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+      description: >
+        Opaque cursor from a previous page's nextCursor. Treat it as a token to
+        echo back, never as data — its encoding is an implementation detail and
+        may change without a contract change. A cursor is valid only for the
+        product whose collection issued it.
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: A previous response's ETag; a match returns 304.
+
+  headers:
+    ETag:
+      schema:
+        type: string
+      description: >
+        A hash of the representation's own content, never a timestamp. Silent
+        maintenance repairs values without moving the row's update timestamp,
+        so a timestamp-derived ETag would let a revalidating cache 304 past a
+        real change indefinitely.
+    CacheControl:
+      schema:
+        type: string
+      description: Caching directives for this representation.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials (enforced at the gateway).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServerError:
+      description: Unexpected service failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    OtherClientError:
+      description: >
+        Any other client error; the specific codes above take precedence. This
+        includes 403 when the gateway's shared backend header is absent or
+        wrong, which surfaces only if a caller bypasses the gateway.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    OtherServerError:
+      description: Any other server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    ProductPage:
+      type: object
+      required: [items, nextCursor]
+      additionalProperties: false
+      description: >
+        One page of a product's organizations. The envelope matches the stock
+        API's StockPage, so a consumer of more than one gold entity API pages
+        them all the same way.
+      properties:
+        items:
+          type: array
+          description: >
+            The page's product rows, one per organization. Empty only when a
+            cursor has reached the end of the collection.
+          items:
+            $ref: "../../schemas/channels/product/product-data-api-created.json"
+        nextCursor:
+          type: [string, "null"]
+          description: >
+            Pass as ?cursor= to fetch the next page; null on the last page.
+            Required and explicitly null rather than omitted, per N12 — an
+            absent key and a final page must not look alike.
+    Error:
+      type: object
+      required: [error]
+      additionalProperties: false
+      description: >
+        The error shape every gold entity API returns. One field, because the
+        message is for a developer reading a log, not for a consumer to branch
+        on — the status code carries the meaning.
+      properties:
+        error:
+          type: string
+          description: A short, human-readable description of what went wrong.

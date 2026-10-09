@@ -1,0 +1,16 @@
+# Paths OUTSIDE this stack that event's own tests read.
+#
+# stacks-ci.yml builds its matrix from the stacks a diff touches, so a test
+# that reads another stack's or a domain's file cannot fire on the change that
+# breaks it -- that change runs a matrix which excludes this stack. Every
+# pattern here also selects event's matrix entry. UIFPE-728.
+#
+# One pattern per line, git pathspec syntax, # for comments. The detect step
+# REFUSES a pattern matching no tracked file, so a stale entry fails loudly
+# rather than silently watching nothing.
+
+# qe/test_uat_deployment.py reads each domain's event Terraform: a domain seeds
+# its own rows into this stack's config tables, and the ConfigSeeds grant that
+# allows it is hand-written because no derivation can see those rows. If a
+# domain starts seeding a third table, that test must fail here (UIFPE-774).
+domains/*/infrastructure/terraform/*_events.tf

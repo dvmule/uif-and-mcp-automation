@@ -1,0 +1,32 @@
+[
+  {
+    "INVENTORY_ITEM_ID": 1001,
+    "ORGANIZATION_ID": 101,
+    "SEGMENT1": "BOOK-A",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  },
+  {
+    "INVENTORY_ITEM_ID": 1001,
+    "ORGANIZATION_ID": 102,
+    "SEGMENT1": "BOOK-A",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  },
+  {
+    "INVENTORY_ITEM_ID": 1002,
+    "ORGANIZATION_ID": 101,
+    "SEGMENT1": "BOOK-B",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  },
+  {
+    "INVENTORY_ITEM_ID": 1003,
+    "ORGANIZATION_ID": 101,
+    "SEGMENT1": "PART-C",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  },
+  {
+    "INVENTORY_ITEM_ID": 1004,
+    "ORGANIZATION_ID": 101,
+    "SEGMENT1": "PART-D",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  }
+]

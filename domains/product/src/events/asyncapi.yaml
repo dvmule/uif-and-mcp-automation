@@ -1,0 +1,147 @@
+asyncapi: 3.0.0
+info:
+  title: Product Change Events
+  version: 2.0.0
+  description: >
+    Domain event published for every product of a completed gold run. The
+    gold pipeline announces a run to the thin-trigger Lambda, which starts
+    the Event Fabric Processor Glue job; the processor registers the run in
+    the DynamoDB run registry, fetches the run's change verdicts from the
+    gold change log ({table}_changes, ADR-0003) joined to the master table
+    via Athena (DELETE verdicts are counted but not yet published - client
+    routing for deletions is a pending decision), projects each product per
+    delivery channel using the registered gold attribute mapping
+    (../schemas/mapping/product/v1/product.mapping.json - the single channel-gating source),
+    and publishes one Pearson CloudEvents 1.0 envelope per product per
+    channel to the domain event bus. Table-driven subscription rules
+    (uif-event-{env}-subscription-configs, created by the subscription
+    provisioner) route events by detail-type + envelope channel to each
+    subscriber's own SQS queue, Kinesis stream, or API endpoint.
+  contact:
+    name: Product domain FDE
+# Apicurio registry coordinate — stacks/apicurio/standards/guidelines.md §1,
+# stacks/apicurio/standards/apicurio-governance.md. The data schemas are their
+# own artifacts (product-created-data / product-updated-data, ../schemas/events/).
+x-registry:
+  group: product
+  artifact: product-events-asyncapi
+  compatibility: BACKWARD
+
+defaultContentType: application/json
+
+channels:
+  # One event type per change verdict (guidelines.md §1): INSERT publishes
+  # created, every other non-delete verdict publishes updated. Both ride the
+  # domain EventBridge bus; the bus detail-type is per-operation
+  # (<domain>.<operation>.<version>, e.g. product.updated.v1). One copy is
+  # still published per delivery channel, each carrying that channel's own
+  # projection; the envelope `channel` field (event=SQS, message=Kinesis,
+  # api=webhook) is what subscription rules filter on.
+  # Partition key is {productId}|{organizationCode} (envelope
+  # `partitionkey`, e.g. A101708520216|MDM - per-(product, org) ordering,
+  # 2026-09-22; degrades to the bare product id when the org value is null),
+  # preserved into client Kinesis streams via PartitionKeyPath.
+  productProductCreatedV1:
+    address: com.pearson.product.product.created.v1
+    description: A product first seen by the gold table (change-log verdict INSERT).
+    x-partitionKey: productId
+    messages:
+      productCreated:
+        $ref: '#/components/messages/ProductCreated'
+  productProductUpdatedV1:
+    address: com.pearson.product.product.updated.v1
+    description: A product already in the gold table changed (change-log verdict UPDATE / REFRESH).
+    x-partitionKey: productId
+    messages:
+      productUpdated:
+        $ref: '#/components/messages/ProductUpdated'
+
+operations:
+  # Both are published at-least-once per product per channel whenever a gold
+  # run is announced (or deliberately reprocessed via the run registry - a
+  # replay re-publishes with NEW event ids and a new correlationid).
+  # Consumers must be idempotent and dedupe on the CloudEvents `id`; the same
+  # `id` is reused across channels for one product-occurrence, and one
+  # `correlationid` ties all events of a run together.
+  publishProductCreated:
+    action: send
+    channel:
+      $ref: '#/channels/productProductCreatedV1'
+    summary: Publish a per-channel projection of a newly created product.
+    messages:
+      - $ref: '#/channels/productProductCreatedV1/messages/productCreated'
+  publishProductUpdated:
+    action: send
+    channel:
+      $ref: '#/channels/productProductUpdatedV1'
+    summary: Publish a per-channel projection of an updated product.
+    messages:
+      - $ref: '#/channels/productProductUpdatedV1/messages/productUpdated'
+
+components:
+  messages:
+    # The envelope is the shared, centrally-registered Apicurio artifact
+    # `uif/pearson-event-envelope` - referenced, never redefined here
+    # (guidelines.md §2). Only `data`'s shape is owned by this domain: the two
+    # data schemas are exact event-tier projections of the gold master and
+    # identical to each other by gate (../../qe/test_event_schemas.py).
+    ProductCreated:
+      name: ProductCreated
+      title: Product created
+      summary: One channel's approved projection of a product first seen by a completed gold run.
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: 'https://schemas.pearson.com/uif/pearson-event-envelope/v1'
+          - type: object
+            properties:
+              data:
+                $ref: '../schemas/events/product-created-data.json'
+      x-dataSchema: ../schemas/events/product-created-data.json
+      x-dataClassification: internal
+      x-piiPresent: false
+      # Worked envelope example: ../schemas/events/product-created-example.json.
+    ProductUpdated:
+      name: ProductUpdated
+      title: Product updated
+      summary: One channel's approved projection of a product changed by a completed gold run.
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: 'https://schemas.pearson.com/uif/pearson-event-envelope/v1'
+          - type: object
+            properties:
+              data:
+                $ref: '../schemas/events/product-updated-data.json'
+      x-dataSchema: ../schemas/events/product-updated-data.json
+      x-dataClassification: internal
+      x-piiPresent: false
+      examples:
+        # A real captured delivery (message channel; see also the standalone
+        # worked example ../schemas/events/product-updated-example.json).
+        - name: message-channel-delivery
+          summary: Message-channel projection of SKU-E2E-4949, routed to ELL by organizationCode 01D
+          payload:
+            specversion: '1.0'
+            id: '25f85111-cb9e-4727-ba49-0cc1ddd3154e'
+            source: 'urn:pearson:svc:product-change-pipeline'
+            type: com.pearson.product.product.updated.v1
+            time: '2026-08-24T08:56:01.083526Z'
+            datacontenttype: application/json
+            dataschema: 'https://schemas.pearson.com/product/product-updated-data/v1'
+            subject: product/SKU-E2E-4949
+            correlationid: 'c83c9800-57c9-4738-a148-e70f403c6a94'
+            partitionkey: SKU-E2E-4949|01D
+            channel: message
+            dataclassification: internal
+            piipresent: false
+            data:
+              productId: SKU-E2E-4949
+              organizationCode: '01D'
+              description: E2E Test Algebra Textbook
+              longDescription: End-to-end test product routed to ELL via organizationCode 01D.
+              itemType: FINISHED_GOOD
+              lineOfBusiness: School
+              isbn13: '9781292431222'
+              unitWeightQuantity: 850
+              copyrightYear: 2024

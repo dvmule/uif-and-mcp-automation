@@ -1,0 +1,212 @@
+# Gold pipeline: product — environment-agnostic base definition.
+# Per-env values (S3 paths, sizing) live in pipelines/overlays/{env}/product.yaml.
+# Synced to DynamoDB by scripts/sync_pipelines.py (config-as-code, ADR-0004).
+# Runtime-owned fields (watermarks, channel registry, cursors) are NEVER
+# defined here — the transform owns them and sync preserves them.
+
+gold_id: product
+domain: product
+
+schema:
+  version: v1
+
+sources:
+  # This name is the contract and was fixed at source, not accommodated here.
+  # RESOLVED 2026-08-06: Silver re-registered the source of truth under the
+  # underscore name this config always asked for (426 columns, 6,865,916 rows,
+  # s3://echo-dev-silver/product/mtl_system_items_b), so register_full_views()
+  # resolves it and the ~8s TABLE_OR_VIEW_NOT_FOUND failure of the daily 06:30
+  # UTC run is gone. Left over upstream: the old hyphenated registration
+  # "mtl-system-items-b" still exists at a SEPARATE location and a slightly
+  # older snapshot (6,865,910 rows) — nothing here reads it, but it is a
+  # duplicate for Silver to drop, and anything querying dev by hand should be
+  # pointed at the underscore name.
+  - alias: items
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+    is_source_of_truth: true
+  - alias: items_ext
+    silver_table: uif_echo_{env}_silver_mdm.ego_mtl_sy_items_ext_b
+    watermark_col: _silver_updated_at
+  - alias: items_tl
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_tl
+    watermark_col: _silver_updated_at
+  # Org dimension (registered 2026-08-05) — supplies organizationCode and the
+  # UK org group, replacing the interim literal map per ADR-0005 item 3. A
+  # source listed here but not in the mapping manifest gets no key_mapping and
+  # the transform refuses to run; a source in the manifest but NOT here is
+  # never registered as a temp view and the SQL fails at TABLE_OR_VIEW_NOT_FOUND.
+  # Both files, always.
+  - alias: org_params
+    silver_table: uif_echo_{env}_silver_mdm.mtl_parameters
+    watermark_col: _silver_updated_at
+  # Second, UNRESTRICTED alias over the driving table (2026-08-17): Phase 2
+  # replaces the `items` view with only the affected entities, so the
+  # isbn13→ppid index that resolves parentProduct's ELSE branch needs its own
+  # FULL view of all products (program's items_all lesson). Declared in BOTH
+  # the mapping manifest and here, always.
+  - alias: items_all
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+  # Category sources (registered 2026-08-31) for the `categories` column.
+  # item_categories is the keyed assignment table; the four below are taxonomy
+  # dimensions declared lookup_only IN THE MANIFEST — they carry no Gold PK
+  # column, so Phase 1 skips them and only the recompute leg's `categories`
+  # pass moves a relabelled value. lookup_only lives in the manifest, not here:
+  # it describes the table, not the environment.
+  - alias: item_categories
+    silver_table: uif_echo_{env}_silver_mdm.mtl_item_categories
+    watermark_col: _silver_updated_at
+  - alias: category_sets
+    silver_table: uif_echo_{env}_silver_mdm.mtl_category_sets
+    watermark_col: _silver_updated_at
+  - alias: category_valid_cats
+    silver_table: uif_echo_{env}_silver_mdm.mtl_category_set_valid_cats
+    watermark_col: _silver_updated_at
+  - alias: categories_b
+    silver_table: uif_echo_{env}_silver_mdm.mtl_categories_b
+    watermark_col: _silver_updated_at
+  - alias: categories_tl
+    silver_table: uif_echo_{env}_silver_mdm.mtl_categories_tl
+    watermark_col: _silver_updated_at
+  # Attribute-group translations (UIFPE-270): url's PRODUCT_URL slot.
+  - alias: items_ext_tl
+    silver_table: uif_echo_{env}_silver_mdm.ego_mtl_sy_items_ext_tl
+    watermark_col: _silver_updated_at
+  # BOM sources (UIFPE-269). bom_bills is keyed (ASSEMBLY_ITEM_ID); the other
+  # three are lookup_only IN THE MANIFEST — component-only edits land via the
+  # schedule.recompute block below. Both files, always.
+  - alias: bom_bills
+    silver_table: uif_echo_{env}_silver_mdm.bom_bill_of_materials
+    watermark_col: _silver_updated_at
+  - alias: bom_components
+    silver_table: uif_echo_{env}_silver_mdm.bom_components_b
+    watermark_col: _silver_updated_at
+  - alias: bom_components_ext
+    silver_table: uif_echo_{env}_silver_mdm.bom_components_ext_b
+    watermark_col: _silver_updated_at
+  - alias: bom_structure_types
+    silver_table: uif_echo_{env}_silver_mdm.bom_structure_types_b
+    watermark_col: _silver_updated_at
+
+target:
+  database: uif_echo_{env}_gold_product
+  table: product
+  primary_key_cols:
+    - inventoryItemId
+    - organizationId
+  # The key a CALLER addresses a row by. The merge key above is the Oracle
+  # surrogate pair, which no channel publishes, so it cannot be the read
+  # surface; these two are unique across the table and are on the api channel.
+  entity_key_cols:
+    - productId
+    - organizationCode
+
+schedule:
+  # UIFPE-149 renamed the cadences; `gold-24h` IS the old `gold` — same daily
+  # clock. One of eleven rungs (gold-5m/10m/15m/30m, then
+  # 1h/2h/4h/6h/8h/12h/24h); the full list lives in
+  # src/apps/scripts/gold_frequencies.py. The Transform UI writes this field.
+  frequency: gold-24h
+  # How OFTEN is `frequency`; from WHEN is this. Together they define the slots
+  # this pipeline runs at: start_time plus multiples of the interval, UTC.
+  # 06:30 is product's existing daily clock (30 min after the Silver daily) —
+  # UIFPE-149 moved scheduling from a shared EventBridge rule to this field
+  # WITHOUT changing when product runs.
+  # Per-pipeline, so two daily tables can run at different times; a sweep rule
+  # ticks every 5 minutes and the dispatcher works out what is due.
+  start_time: "06:30"
+  # Hold off this long after a FAILED/TIMEOUT/ERROR/STOPPED run instead of
+  # retrying on the very next tick. Not a circuit breaker — it expires on its
+  # own, so a transient failure still self-heals. 0 disables it.
+  # At this cadence the cooldown is nearly inert (the next tick is 24h away);
+  # it is stated explicitly because it becomes load-bearing the moment anything
+  # moves to a sub-hourly rung.
+  failure_cooldown_minutes: 30
+  # ADR-0020 decision 5. UIFPE-269 (price's UIFPE-263 precedent): the BOM
+  # component, UDA and structure-type tables carry no product key, so a
+  # component edit that touches no bill header is invisible to incremental CDC.
+  # The leg recomputes these arrays for every product; rows whose hash moved
+  # merge and announce as ordinary updates.
+  #
+  # It rides the 06:30 run itself rather than following it on a clock of its
+  # own, so the ordering that used to matter — and the first-load race the old
+  # second sweep had to guard against (UIFPE-265) — no longer exist.
+  recompute:
+    undetectable_columns:
+      - standardComponents
+      - customComponents
+      # categories has the same disease and has had it since 2026-08-31: its
+      # four taxonomy sources are lookup_only, so a category RELABEL moves no
+      # keyed row and the stale label sits on ~2.1M product rows forever. The
+      # manifest documented that as an accepted consequence "until the next
+      # targeted recompute" — this leg is that recompute (PR review, 2026-09-07).
+      - categories
+    every_n_runs: 8
+
+# ── Reconcile ───────────────────────────────────────────────────────────────
+# Live at the ordinary cap. The one-off catch-up is done (UIFPE-704); 5,000 is
+# the steady-state cap and must stay there, or it stops catching an upstream
+# mass-delete.
+#
+# Do not replay run jr_a935b2a9cf...d778b1 — its DELETE change rows are
+# unpublished, so a processor run or redrive would emit them all.
+reconcile:
+  enabled: true
+  dry_run: false
+  max_deletes_per_run: 5000
+
+# Publish GoldMergeCompleted to uif-event-{env}-bus when a merge finishes.
+# Absent means no event, which is how marketing_copy stays out of scope.
+announce: true
+
+# Serve this entity from the SHARED gold serving table (UIFPE-518): one table
+# and one Lambda for every entity, so this line is the whole opt-in.
+#
+# Addressed by entity_key_cols through the business-key index, which reads a
+# two-column key since UIFPE-709. Needs a one-off baseline after deploy: the
+# sync is change-log driven and a first fill has no change rows to read.
+serving:
+  enabled: true
+
+channels:
+  bootstrap_mode: silent
+backfill_mode: silent
+
+# Snapshot pre-gate: the dispatcher skips StartJobRun entirely when every
+# source's Iceberg metadata_location matches the last successful run's map
+# (watermark.silver_snapshots, runtime-owned). Uncertainty always dispatches.
+snapshot_gate: true
+
+glue:
+  # ── CDC profile — what the dispatcher passes to scheduled runs ──────────
+  # G.1X x8 = 8 DPU (32 vCPU / 128 GB): starting point chosen 2026-08-07,
+  # BEFORE the first incremental measurement — increase if it shows pressure,
+  # don't fail-and-wonder. Product's incremental is not delta-proportional
+  # (Phase 2 re-reads the full 193.7M-row ego_mtl_sy_items_ext_b through 30
+  # CTEs), so the floor scales from the measured full load: ~7 min at 32 DPU
+  # suggests ~25-40 min here. The 180-minute ceiling is the safety margin
+  # that makes this experiment fail slow instead of looping timeout+retry.
+  # NOTE: these values reach dev only at the F1/F2 ops-window sync — the
+  # first scheduled incremental (2026-08-08 06:30 UTC) still runs at the
+  # deployed G.2X x16 and is the baseline to compare against.
+  worker_type: G.1X
+  num_workers: 8
+  timeout_minutes: 180
+  # Shared runtime knobs — read by the jobs on EVERY run regardless of which
+  # capacity profile launched it. Not part of either profile.
+  max_affected_fraction: 0.5
+
+  # ── Full-load profile — initial materialization (dispatcher-detected via
+  # target-table absence) and manual --rebuild runs. G.2X x8 = 16 DPU:
+  # the measured 32-DPU rebuild took 6m48s, so ~13-15 min expected here.
+  # Dispatcher fallbacks when this block is missing stay at the heavy
+  # constants (G.2X x16 x180) — never the CDC block. ──────────────────────
+  full_load:
+    worker_type: G.2X
+    num_workers: 8
+    timeout_minutes: 180
+
+metadata:
+  owner: reyasahamed.habibrahman@pearson.com
+  domain: product

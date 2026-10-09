@@ -1,0 +1,598 @@
+name: MCP Deploy (reusable)
+
+# Reusable MCP pipeline — capabilities/mcp/mcp-bridge.md is the standard this
+# implements. `workflow_call` ONLY: its single caller is the generic entry point
+# mcp.yml, which DISCOVERS onboarded domains (domains/<d>/src/mcp/bridge-config.yaml) and runs
+# this pipeline once per affected domain, serially. No per-domain workflow exists.
+#
+# ONE SHARED MCP BRIDGE PER ENVIRONMENT (decided 2026-09-29). Every UIF domain
+# API of an environment is served by one Bridge (DEV: uif-domains-mcp on
+# the shared gateway; anypoint-environments.yaml `shared_bridge`). A domain run
+# publishes ITS REST asset at ITS release version and then RECONCILES its own
+# route (upstream + connection + tools) into the shared Bridge, preserving every
+# other domain's route. The shared MCP Exchange asset (tools of all domains) is
+# merged and versioned inside that reconciliation step.
+#
+# Stage graph (per mcp-bridge.md):
+#   validate -> generate -> preview                  always (every run, incl. dry runs)
+#   live:   resolve REST release version (Exchange READS) -> generate stamped
+#           artifacts -> publish REST -> validate               (per domain, parallel)
+#   bridge: deploy_bridge (merge + publish shared MCP asset, reconcile the route:
+#           CREATE | ADD | UPDATE in place | NO-OP) -> conformance
+#           SERIALIZED per environment (job concurrency group): two domains never
+#           mutate the shared Bridge at the same time; a queued run waits.
+#   both gated FIVE ways (see the live job's comment block): explicit dispatch
+#   dry_run=false, the shared MCP_DEPLOY_ENABLED latch, MCP_LIVE_ENABLED set only
+#   inside the live jobs, Anypoint credentials present, and a resolved upstream_url.
+#
+# The OpenAPI contract the domain selects in bridge-config.yaml (`contract:`, default: the
+# single domains/<domain>/src/api/*/openapi.yaml) is the source of
+# truth for tool CONTENT; bridge-config.yaml supplies what the contract cannot
+# express; the deployed upstream URL is an EXTERNAL INPUT — this pipeline consumes
+# it and fails closed when it is null; it never creates or discovers an endpoint.
+#
+# RELEASE VERSION (one owner: $TOOLING_DIR/scripts/release_version.py). Exchange
+# state - not the contract's info.version - decides whether a new REST release is
+# needed and what its version is: REST asset absent -> 1.0.0; latest published
+# contract == GitHub contract -> NO-OP at the latest version; different -> patch
+# bump. The resolved version is stamped into a BUILD COPY of the contract
+# (build/mcp/openapi-release.yaml) and drives the REST asset and this domain's
+# route connection; the authoritative OpenAPI is never modified. The SHARED MCP
+# asset version is independent (shared_bridge.resolve_shared_version). Dry runs
+# preview with the contract's own info.version (no credentials, Exchange not
+# consulted).
+
+on:
+  workflow_call:
+    inputs:
+      domain:
+        description: "Domain name (domains/<domain>/)"
+        required: true
+        type: string
+      environment:
+        description: "Target UIF environment (dev | uat | prod)"
+        required: true
+        type: string
+      dry_run:
+        description: "true (default): validate/generate/preview only — no remote operation of any kind"
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      ANYPOINT_CLIENT_ID:
+        required: false # needed only by the live jobs (dry runs never touch them)
+      ANYPOINT_CLIENT_SECRET:
+        required: false
+
+permissions:
+  contents: read
+
+# ── Two kinds of path, deliberately kept apart ──────────────────────────────────
+#   DOMAIN-OWNED (always derived from inputs.domain — never a fixed domain):
+#     domains/${{ inputs.domain }}/src/api/<api>/openapi.yaml the contract (resolved per job: steps.contract.outputs.path)
+#     domains/${{ inputs.domain }}/src/mcp/bridge-config.yaml the domain's MCP inputs
+#     domains/${{ inputs.domain }}/qe/...                     the domain's QE gate
+#   GENERIC MCP TOOLING (capability implementation, domain-agnostic; parameterised
+#   by the domain paths above):
+#     $TOOLING_DIR/scripts/*.py + scripts/anypoint-environments.yaml (shared
+#     Anypoint platform/environment coordinates + the shared Bridge identity)
+#   TOOLING_DIR is the shared home for the MCP capability's executable tooling,
+#   following the schema-governance precedent (contract-governance.yml uses the
+#   same TOOLING_DIR shape). No step below may reference a domain path for
+#   tooling, and no domain carries a copy of these scripts.
+env:
+  TOOLING_DIR: delivery-lab/reference-implementations/mcp-bridge
+
+jobs:
+  validate:
+    name: Contract & generation gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install test dependencies
+        # the shared tooling's pins always; a domain's own QE pins only when the domain has a QE suite
+        run: |
+          pip install -r "$TOOLING_DIR"/requirements-dev.txt
+          if [ -f domains/${{ inputs.domain }}/qe/requirements-dev.txt ]; then
+            pip install -r domains/${{ inputs.domain }}/qe/requirements-dev.txt
+          fi
+      - name: Domain inputs present (fail closed)
+        # bridge-config.yaml onboards the domain and selects its contract; it declares the domain
+        # (and only intentionally domain-specific overrides - the common UIF API upstream is
+        # shared platform configuration in anypoint-environments.yaml)
+        run: |
+          f=domains/${{ inputs.domain }}/src/mcp/bridge-config.yaml
+          [ -f "$f" ] || { echo "::error::$f is missing - see capabilities/mcp/mcp-bridge.md (Onboarding a domain)."; exit 1; }
+      - name: Resolve the domain's MCP contract (bridge-config.yaml `contract:` or the single src/api candidate)
+        id: contract
+        run: |
+          CONTRACT=$(python "$TOOLING_DIR"/scripts/affected_domains.py --contract-path "${{ inputs.domain }}")
+          echo "contract=$CONTRACT"
+          echo "path=$CONTRACT" >> "$GITHUB_OUTPUT"
+      - name: Shared MCP tooling gate (generic tests travel with the tooling)
+        run: python -m pytest "$TOOLING_DIR"/tests -q
+      - name: Contract <-> MCP generation gate (shared, contract-derived)
+        # the generic gate runs for EVERY domain: every operation of the contract is exactly
+        # one tool, the mappings match, the 3.1 contract projects to OAS 3.0 without loss.
+        # A domain MAY add its own qe/test_mcp_generation.py; it is not required.
+        run: |
+          python "$TOOLING_DIR"/scripts/generate_mcp_metadata.py \
+            --spec "${{ steps.contract.outputs.path }}" \
+            --source-asset-id gate --source-version 0.0.0 --asset-id gate --asset-version 0.0.0 --org-id gate \
+            --out build/gate
+          python "$TOOLING_DIR"/scripts/validate_mcp_metadata.py --metadata build/gate/mcp-metadata.json --mappings build/gate/tool-mappings.json
+          python "$TOOLING_DIR"/scripts/contract_gate.py --spec "${{ steps.contract.outputs.path }}" \
+            --metadata build/gate/mcp-metadata.json --mappings build/gate/tool-mappings.json
+          if [ -f domains/${{ inputs.domain }}/qe/test_mcp_generation.py ]; then
+            python -m pytest domains/${{ inputs.domain }}/qe/test_mcp_generation.py -q
+          fi
+
+  generate:
+    name: Generate & validate MCP artifacts
+    needs: validate
+    runs-on: ubuntu-latest
+    # Platform coordinates (org/env/gateway/TLS ids, public host, common upstream origin) are the selected
+    # GitHub ENVIRONMENT's VARIABLES (never literals in Git); this job needs them for the generated metadata
+    # (connection groupId) and the deploy preview, so it runs under the Environment. No secrets here.
+    environment: ${{ inputs.environment }}
+    env:
+      ANYPOINT_ORG_ID: ${{ vars.ANYPOINT_ORG_ID }}
+      ANYPOINT_ENV_ID: ${{ vars.ANYPOINT_ENV_ID }}
+      ANYPOINT_GATEWAY_ID: ${{ vars.ANYPOINT_GATEWAY_ID }}
+      # ANYPOINT_TLS_SECRET_GROUP_ID: ${{ vars.ANYPOINT_TLS_SECRET_GROUP_ID }}
+      # ANYPOINT_TLS_CONTEXT_ID: ${{ vars.ANYPOINT_TLS_CONTEXT_ID }}
+      ANYPOINT_GATEWAY_NAME: ${{ vars.ANYPOINT_GATEWAY_NAME }}
+      ANYPOINT_GATEWAY_PUBLIC_HOST: ${{ vars.ANYPOINT_GATEWAY_PUBLIC_HOST }}
+      UIF_UPSTREAM_ORIGIN: ${{ vars.UIF_UPSTREAM_ORIGIN }}
+    outputs:
+      upstream_url: ${{ steps.cfg.outputs.upstream_url }}
+      mcp_asset_id: ${{ steps.cfg.outputs.mcp_asset_id }}       # the SHARED Bridge's MCP asset (anypoint-environments.yaml)
+      bridge_label: ${{ steps.cfg.outputs.bridge_label }}       # the SHARED Bridge instance label
+      source_asset_id: ${{ steps.cfg.outputs.source_asset_id }}
+      contract_version: ${{ steps.cfg.outputs.contract_version }}   # the contract's own info.version (display only)
+      preview_release_version: ${{ steps.release.outputs.version }} # dry-run preview; the live job resolves from Exchange
+      route_label: ${{ steps.cfg.outputs.route_label }}
+      transcoding_path: ${{ steps.cfg.outputs.transcoding_path }}
+      base_path: ${{ steps.cfg.outputs.base_path }}             # the SHARED Bridge listener path
+      org_id: ${{ steps.cfg.outputs.org_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install pyyaml jsonschema
+      - name: Resolve the domain's MCP contract (bridge-config.yaml `contract:` or the single src/api candidate)
+        id: contract
+        run: |
+          CONTRACT=$(python "$TOOLING_DIR"/scripts/affected_domains.py --contract-path "${{ inputs.domain }}")
+          echo "contract=$CONTRACT"
+          echo "path=$CONTRACT" >> "$GITHUB_OUTPUT"
+      - name: Resolve platform coordinates (GitHub Environment variables -> build/mcp/anypoint-environments.resolved.yaml)
+        id: platform
+        # anypoint-environments.yaml holds ${VAR} placeholders; the selected GitHub ENVIRONMENT supplies
+        # the values (job env above). Fails closed naming any missing variable; prints names, never values.
+        run: python "$TOOLING_DIR"/scripts/platform_config.py --environment "${{ inputs.environment }}" --out build/mcp --github-output
+      - name: Read bridge-config (the domain MCP input contract) + shared platform coordinates
+        id: cfg
+        shell: python
+        env:
+          CONTRACT: ${{ steps.contract.outputs.path }}  # resolved above from bridge-config.yaml
+          PLATFORM: ${{ steps.platform.outputs.platform_config }}  # the RESOLVED platform coordinates (build artifact)
+        # org_id is the REAL, non-secret Anypoint organization id from the shared
+        # anypoint-environments.yaml (never a placeholder): the generated
+        # mcp-metadata.json embeds it as the connection groupId and is merged into
+        # the shared MCP asset by the live job, so generation and publication must
+        # carry the same Exchange coordinates. The Bridge identity (label, MCP
+        # asset, listener base path, transport path) is the SHARED one
+        # (shared_bridge.load_shared / effective_config): a domain contributes a
+        # route, it never chooses a Bridge label, asset or path of its own.
+        run: |
+          import os, sys, yaml
+          sys.path.insert(0, os.path.join(os.environ["TOOLING_DIR"], "scripts"))
+          from shared_bridge import effective_config, load_shared
+          cfg = yaml.safe_load(open("domains/${{ inputs.domain }}/src/mcp/bridge-config.yaml"))
+          spec = yaml.safe_load(open(os.environ["CONTRACT"], encoding="utf-8-sig"))  # the domain's selected contract
+          env = "${{ inputs.environment }}"
+          platform = (yaml.safe_load(open(os.environ["PLATFORM"], encoding="utf-8-sig")) or {}).get(env) or {}  # resolved by platform_config.py
+          if not platform.get("org_id"):
+              raise SystemExit(f"anypoint-environments.yaml has no org_id for '{env}' (DEV-only automation)")
+          shared = load_shared(platform, env)
+          eff = effective_config(cfg, shared)
+          # the upstream comes from the EFFECTIVE config: the COMMON UIF API upstream of the
+          # environment (anypoint-environments.yaml <env>.upstream_url, shared by every domain)
+          # unless the domain's bridge-config.yaml intentionally overrides it
+          upstream = ((eff.get("environments") or {}).get(env) or {}).get("upstream_url") or ""
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"upstream_url={upstream}\n")
+              f.write(f"mcp_asset_id={shared['mcp_asset_id']}\n")
+              f.write(f"bridge_label={shared['instance_label']}\n")
+              f.write(f"source_asset_id={eff['source_asset_id']}\n")
+              f.write(f"contract_version={spec['info']['version']}\n")
+              f.write(f"route_label={eff.get('route_label', eff['source_asset_id'])}\n")
+              f.write(f"transcoding_path={shared['transcoding_path']}\n")
+              f.write(f"base_path={shared['base_path']}\n")
+              f.write(f"org_id={platform['org_id']}\n")
+      - name: Resolve release version (preview — Exchange not consulted)
+        id: release
+        # Dry runs have no credentials, so the ONE version owner previews with the
+        # contract's own info.version and writes build/mcp/release.json (decision
+        # "preview") + build/mcp/openapi-release.yaml. Every step below consumes
+        # those two files exactly as the live job consumes the resolved ones.
+        run: |
+          python "$TOOLING_DIR"/scripts/release_version.py \
+            --spec "${{ steps.contract.outputs.path }}" \
+            --rest-asset-id "${{ steps.cfg.outputs.source_asset_id }}" \
+            --org-id        "${{ steps.cfg.outputs.org_id }}" \
+            --out build/mcp \
+            --dry-run
+      - name: Generate artifacts from the release-stamped contract
+        run: |
+          python "$TOOLING_DIR"/scripts/generate_mcp_metadata.py \
+            --spec build/mcp/openapi-release.yaml \
+            --source-asset-id "${{ steps.cfg.outputs.source_asset_id }}" \
+            --source-version  "${{ steps.release.outputs.version }}" \
+            --asset-id        "${{ steps.cfg.outputs.mcp_asset_id }}" \
+            --asset-version   "${{ steps.release.outputs.version }}" \
+            --org-id          "${{ steps.cfg.outputs.org_id }}" \
+            --route-label     "${{ steps.cfg.outputs.route_label }}" \
+            --transcoding-path "${{ steps.cfg.outputs.transcoding_path }}" \
+            --out build/mcp
+        # NOTE: generator/validator are generic MCP tooling resolved via $TOOLING_DIR
+        # (shared home under delivery-lab/reference-implementations; see the env block at the top of this file).
+      - name: Validate artifacts
+        # structural validity + the contract-derived gate: every operation of the
+        # (release-stamped) contract is exactly one tool with the derived name,
+        # mapping and input schema - the OpenAPI is the only source of truth.
+        run: |
+          python "$TOOLING_DIR"/scripts/validate_mcp_metadata.py \
+            --metadata build/mcp/mcp-metadata.json \
+            --mappings build/mcp/tool-mappings.json
+          python "$TOOLING_DIR"/scripts/contract_gate.py \
+            --spec build/mcp/openapi-release.yaml \
+            --metadata build/mcp/mcp-metadata.json \
+            --mappings build/mcp/tool-mappings.json
+      - name: REST publish preview (OAS 3.0.3 projection, dry-run)
+        # Renders the Exchange projection artifact (build/mcp/openapi-3.0-projection.yaml)
+        # of the release-stamped contract copy and the exact documented v2
+        # request; sends nothing. Fails the run if the 3.1 contract contains a
+        # construct the projection cannot translate.
+        run: |
+          python "$TOOLING_DIR"/scripts/exchange_publish.py rest \
+            --spec build/mcp/openapi-release.yaml \
+            --out build/mcp \
+            --org-id "${{ steps.cfg.outputs.org_id }}" \
+            --asset-id "${{ steps.cfg.outputs.source_asset_id }}" \
+            --asset-version "${{ steps.release.outputs.version }}" \
+            --dry-run
+      - name: Deploy preview (deploy_bridge lifecycle, dry-run)
+        # deploy_bridge.py --dry-run renders everything the bridge job may send -
+        # the documented Exchange v2 external-instance reuse-or-create (name
+        # uif-<domain>-<env>, endpointUri = upstream_url, private), the shared MCP
+        # asset stage, and the COMPLETE UI-equivalent payload of this domain's
+        # route with the SHARED Bridge identity (label, MCP asset, base path from
+        # anypoint-environments.yaml) and <UNRESOLVED:...> markers for every input
+        # not yet supplied. If the shared Bridge exists, execute reconciles the
+        # route into it in place instead (identical -> NO-OP). Sends nothing —
+        # not even a token request. The REST version comes from release.json
+        # (never a second computation). Surface classification: the eventual
+        # POST/PATCH is the UI-observed xapi call (see the script docstrings /
+        # mcp-bridge.md). Also writes build/mcp/effective-bridge-config.yaml.
+        run: |
+          python "$TOOLING_DIR"/scripts/deploy_bridge.py \
+            --config domains/${{ inputs.domain }}/src/mcp/bridge-config.yaml \
+            --artifacts build/mcp \
+            --environment "${{ inputs.environment }}" \
+            --release-file build/mcp/release.json \
+            --platform-config "${{ steps.platform.outputs.platform_config }}" \
+            --dry-run | tee build/mcp/deploy-preview.txt
+          {
+            echo '## Shared Bridge deploy preview (dry-run — nothing sent)'
+            echo '```'
+            cat build/mcp/deploy-preview.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload artifacts for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-artifacts-${{ inputs.domain }}-${{ inputs.environment }}
+          path: build/mcp/
+
+  preview:
+    name: Deployment preview (no remote operations)
+    needs: generate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolved plan
+        run: |
+          echo "## MCP deploy preview — ${{ inputs.domain }} / ${{ inputs.environment }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Input | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Contract info.version (content source of truth) | ${{ needs.generate.outputs.contract_version }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Source REST asset | ${{ needs.generate.outputs.source_asset_id }} @ <resolved from Exchange in the live job; preview ${{ needs.generate.outputs.preview_release_version }}> |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Shared Bridge | ${{ needs.generate.outputs.bridge_label }} at /${{ needs.generate.outputs.base_path }} — this domain contributes route ${{ needs.generate.outputs.route_label }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Shared MCP asset | ${{ needs.generate.outputs.mcp_asset_id }} @ <merged with the other domains' tools and resolved from Exchange in the bridge job> |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Release rule (REST) | asset absent -> 1.0.0; latest == GitHub contract -> NO-OP (same version); changed -> patch bump |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Upstream URL (${{ inputs.environment }}) | ${{ needs.generate.outputs.upstream_url || 'UNRESOLVED — live stages will fail closed' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Bridge lifecycle | ensure/reuse upstream -> shared Bridge absent: CREATE / route absent: ADD / route changed: UPDATE in place / identical: NO-OP / unexpected: REFUSE (never delete/recreate; other domains' routes preserved) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| dry_run | ${{ inputs.dry_run }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Generated artifacts attached as \`mcp-artifacts-${{ inputs.domain }}-${{ inputs.environment }}\`." >> "$GITHUB_STEP_SUMMARY"
+
+  # ── LIVE DEPLOYMENT — every gate below must hold before anything is sent ────
+  #   1. inputs.dry_run == false        (explicit live execution flag — only a
+  #                                      workflow_dispatch can set it)
+  #   2. MCP_DEPLOY_ENABLED == 'true'   (ONE shared latch REPOSITORY variable for the whole MCP
+  #                                      automation; off -> live/bridge are SKIPPED, never a red run;
+  #                                      whole MCP automation - never a per-domain one)
+  #   3. MCP_LIVE_ENABLED=true          (set ONLY inside the live jobs — the scripts'
+  #                                      own gate; --execute refuses without it)
+  #   4. ANYPOINT_CLIENT_ID/SECRET      (GitHub Environment secrets, checked)
+  #   5. upstream_url resolved          (external input — never created here)
+  # Anypoint org/env/gateway/TLS and the shared Bridge identity come from the
+  # shared MCP platform/environment configuration (anypoint-environments.yaml);
+  # gatewayVersion is DISCOVERED from the gateway target at deploy time; the REST
+  # RELEASE version is RESOLVED from Exchange by release_version.py (absent ->
+  # 1.0.0 | identical -> NO-OP at the latest version | changed -> patch bump) and
+  # binds the REST asset and this domain's route connection (publish guard:
+  # absent -> publish, identical -> no-op, different content -> FAIL CLOSED). The
+  # authoritative OpenAPI is never modified. This job does the DOMAIN-SCOPED work
+  # only; the shared Bridge mutation is the separate, serialized `bridge` job.
+  live:
+    name: Live release (REST asset)
+    needs: [generate, preview]
+    # Gates 1 + 2 at JOB level: the explicit live flag (a push on develop, or workflow_dispatch
+    # with dry_run=false; dispatch defaults to dry_run=true) AND the ONE shared latch
+    # MCP_DEPLOY_ENABLED == 'true'. Latch off -> this job and `bridge` are SKIPPED, the run stays
+    # green (validate/generate/preview still ran; zero Anypoint calls). NOTE: a job-level `if`
+    # sees REPOSITORY/organization variables only, so the latch must be a REPOSITORY variable;
+    # the step-level latch check below (gate 2, defense in depth) also sees Environment variables.
+    if: ${{ !inputs.dry_run && vars.MCP_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    # Gate 4: GitHub Environment — supplies the Anypoint Connected App secrets
+    # and enforces any protection rules configured on it.
+    environment: ${{ inputs.environment }}
+    outputs:
+      gateway_public_host: ${{ steps.platform.outputs.gateway_public_host }}
+      release_version: ${{ steps.release.outputs.version }}
+    env:
+      # Gate 3: the scripts' own live latch — set ONLY inside the live jobs.
+      MCP_LIVE_ENABLED: "true"
+      ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
+      ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+      # platform coordinates = this GitHub ENVIRONMENT's VARIABLES (resolved by platform_config.py; never literals in Git)
+      ANYPOINT_ORG_ID: ${{ vars.ANYPOINT_ORG_ID }}
+      ANYPOINT_ENV_ID: ${{ vars.ANYPOINT_ENV_ID }}
+      ANYPOINT_GATEWAY_ID: ${{ vars.ANYPOINT_GATEWAY_ID }}
+      # ANYPOINT_TLS_SECRET_GROUP_ID: ${{ vars.ANYPOINT_TLS_SECRET_GROUP_ID }}
+      # ANYPOINT_TLS_CONTEXT_ID: ${{ vars.ANYPOINT_TLS_CONTEXT_ID }}
+      ANYPOINT_GATEWAY_NAME: ${{ vars.ANYPOINT_GATEWAY_NAME }}
+      ANYPOINT_GATEWAY_PUBLIC_HOST: ${{ vars.ANYPOINT_GATEWAY_PUBLIC_HOST }}
+      UIF_UPSTREAM_ORIGIN: ${{ vars.UIF_UPSTREAM_ORIGIN }}
+    steps:
+      # Gate 2 (defense in depth; the job-level `if` above already skipped the job when the latch is
+      # off): the ONE shared latch variable MCP_DEPLOY_ENABLED (repo or
+      # Environment variable). Adding a domain never requires a variable of its own.
+      - name: Latch check (fail closed)
+        env:
+          MCP_DEPLOY_ENABLED: ${{ vars.MCP_DEPLOY_ENABLED }}
+        run: |
+          [ "$MCP_DEPLOY_ENABLED" = "true" ] || {
+            echo "::error::Deploy latched off - repo/environment variable MCP_DEPLOY_ENABLED != 'true'."; exit 1; }
+          echo "latch MCP_DEPLOY_ENABLED=true"
+      - name: Credentials present (fail closed)
+        run: |
+          [ -n "$ANYPOINT_CLIENT_ID" ] && [ -n "$ANYPOINT_CLIENT_SECRET" ] || {
+            echo "::error::ANYPOINT_CLIENT_ID / ANYPOINT_CLIENT_SECRET missing from the '${{ inputs.environment }}' GitHub Environment."; exit 1; }
+      - name: Upstream present (fail closed — MCP automation never creates a URL)
+        run: |
+          [ -n "${{ needs.generate.outputs.upstream_url }}" ] || {
+            echo "::error::no upstream_url resolved for ${{ inputs.environment }} - set the common UIF API upstream in anypoint-environments.yaml (<env>.upstream_url) or a domain override in bridge-config environments.<env>.upstream_url."; exit 1; }
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install pyyaml jsonschema
+      - name: Resolve the domain's MCP contract (bridge-config.yaml `contract:` or the single src/api candidate)
+        id: contract
+        run: |
+          CONTRACT=$(python "$TOOLING_DIR"/scripts/affected_domains.py --contract-path "${{ inputs.domain }}")
+          echo "contract=$CONTRACT"
+          echo "path=$CONTRACT" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve shared platform coordinates
+        id: platform
+        # anypoint-environments.yaml holds ${VAR} placeholders; the selected GitHub ENVIRONMENT supplies
+        # the values (job env above). Fails closed naming any missing variable; prints names, never values.
+        run: python "$TOOLING_DIR"/scripts/platform_config.py --environment "${{ inputs.environment }}" --out build/mcp --github-output
+
+      # ── Stage 0: resolve the ONE REST release version (Exchange READS only,
+      #    targeted to this domain's REST asset: latest-asset descriptor, the latest
+      #    version's published `oas` file, and an existence check of the candidate
+      #    next version). Writes build/mcp/release.json + the release-stamped
+      #    contract copy build/mcp/openapi-release.yaml. Nothing is published here.
+      - name: Resolve release version (Exchange reads only)
+        id: release
+        run: |
+          python "$TOOLING_DIR"/scripts/release_version.py \
+            --spec "${{ steps.contract.outputs.path }}" \
+            --rest-asset-id "${{ needs.generate.outputs.source_asset_id }}" \
+            --org-id        "${{ steps.platform.outputs.org_id }}" \
+            --out build/mcp \
+            --resolve
+      - name: Release summary
+        run: |
+          {
+            echo "## Release — ${{ inputs.domain }} / ${{ inputs.environment }}"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Decision | ${{ steps.release.outputs.decision }} (latest in Exchange: ${{ steps.release.outputs.latest || 'none' }}) |"
+            echo "| REST release version | **${{ steps.release.outputs.version }}** — ${{ needs.generate.outputs.source_asset_id }} and this domain's route connection bind this version |"
+            echo "| Shared MCP asset | ${{ needs.generate.outputs.mcp_asset_id }} @ <merged + resolved in the bridge job> |"
+            echo "| Contract info.version (unchanged in git) | ${{ needs.generate.outputs.contract_version }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Stage 0b: generate the artifacts FROM the release-stamped contract copy,
+      #    at the resolved version (the dry-run job's artifacts are for review
+      #    only; the live jobs never publish anything they did not derive from the
+      #    resolved release).
+      - name: Generate release artifacts
+        run: |
+          python "$TOOLING_DIR"/scripts/generate_mcp_metadata.py \
+            --spec build/mcp/openapi-release.yaml \
+            --source-asset-id "${{ needs.generate.outputs.source_asset_id }}" \
+            --source-version  "${{ steps.release.outputs.version }}" \
+            --asset-id        "${{ needs.generate.outputs.mcp_asset_id }}" \
+            --asset-version   "${{ steps.release.outputs.version }}" \
+            --org-id          "${{ steps.platform.outputs.org_id }}" \
+            --route-label     "${{ needs.generate.outputs.route_label }}" \
+            --transcoding-path "${{ needs.generate.outputs.transcoding_path }}" \
+            --out build/mcp
+
+      # ── Stage 1: publish source REST asset (DOCUMENTED Exchange API v2,
+      #    classifier oas). Exchange supports OAS 2.0/3.0 only, so the script
+      #    publishes a deterministic OAS 3.0.3 PROJECTION of the release-stamped
+      #    3.1 contract copy (build artifact; fails closed on any untranslatable
+      #    construct; the git contract is untouched and authoritative). Version
+      #    guard: asset version == the stamped info.version == release version.
+      #    Publish guard: absent->publish, identical->no-op (the NO-OP release
+      #    decision lands here), different content->FAIL CLOSED.
+      - name: Publish REST asset
+        run: |
+          python "$TOOLING_DIR"/scripts/exchange_publish.py rest \
+            --spec build/mcp/openapi-release.yaml \
+            --out build/mcp \
+            --org-id "${{ steps.platform.outputs.org_id }}" \
+            --asset-id "${{ needs.generate.outputs.source_asset_id }}" \
+            --asset-version "${{ steps.release.outputs.version }}" \
+            --execute
+
+      # ── Stage 2: re-validate the generated artifacts (defense in depth):
+      #    structural validity + the contract-derived gate against the stamped copy
+      - name: Validate artifacts
+        run: |
+          python "$TOOLING_DIR"/scripts/validate_mcp_metadata.py \
+            --metadata build/mcp/mcp-metadata.json \
+            --mappings build/mcp/tool-mappings.json
+          python "$TOOLING_DIR"/scripts/contract_gate.py \
+            --spec build/mcp/openapi-release.yaml \
+            --metadata build/mcp/mcp-metadata.json \
+            --mappings build/mcp/tool-mappings.json
+
+      # The bridge job consumes exactly what THIS run derived (release.json, the
+      # stamped contract, the generated artifacts) - handed over inside the run.
+      - name: Hand the release artifacts to the bridge job
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-release-${{ inputs.domain }}-${{ inputs.environment }}
+          path: build/mcp/
+          retention-days: 7
+
+  # ── SHARED BRIDGE MUTATION — serialized per environment ─────────────────────
+  # Several domain pipelines modify the SAME Bridge. This job, and only this job,
+  # runs inside the concurrency group mcp-shared-bridge-<environment>: while one
+  # domain's bridge job runs, another domain's waits (cancel-in-progress=false ->
+  # queued, never cancelled mid-write), so a lost update (A reads, B reads, A
+  # writes, B overwrites A) cannot happen through the pipeline. Nothing else is
+  # serialized: validation, generation and the REST publish of different domains
+  # run in parallel. GitHub keeps ONE pending job per group - a third domain
+  # arriving while one runs and one waits replaces the waiting one, which then
+  # needs a re-run (nothing half-written). Second line of defence, inside
+  # update_bridge.py: the Bridge is re-read right before the first PATCH and any
+  # change since the decision read REFUSES the write.
+  bridge:
+    name: Shared Bridge (serialized per environment)
+    needs: [generate, live]
+    # same job-level gate as `live` (and `needs: live` already skips this job whenever live is skipped)
+    if: ${{ !inputs.dry_run && vars.MCP_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: mcp-shared-bridge-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      MCP_LIVE_ENABLED: "true"
+      ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
+      ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+      # platform coordinates = this GitHub ENVIRONMENT's VARIABLES (resolved by platform_config.py; never literals in Git)
+      ANYPOINT_ORG_ID: ${{ vars.ANYPOINT_ORG_ID }}
+      ANYPOINT_ENV_ID: ${{ vars.ANYPOINT_ENV_ID }}
+      ANYPOINT_GATEWAY_ID: ${{ vars.ANYPOINT_GATEWAY_ID }}
+      # ANYPOINT_TLS_SECRET_GROUP_ID: ${{ vars.ANYPOINT_TLS_SECRET_GROUP_ID }}
+      # ANYPOINT_TLS_CONTEXT_ID: ${{ vars.ANYPOINT_TLS_CONTEXT_ID }}
+      ANYPOINT_GATEWAY_NAME: ${{ vars.ANYPOINT_GATEWAY_NAME }}
+      ANYPOINT_GATEWAY_PUBLIC_HOST: ${{ vars.ANYPOINT_GATEWAY_PUBLIC_HOST }}
+      UIF_UPSTREAM_ORIGIN: ${{ vars.UIF_UPSTREAM_ORIGIN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install pyyaml jsonschema
+      - name: Take over this run's release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp-release-${{ inputs.domain }}-${{ inputs.environment }}
+          path: build/mcp/
+
+      # ── Stage 3+4: shared MCP asset + Bridge - ONE orchestrated step (deploy_bridge.py):
+      #    a. ensure/reuse the Exchange EXTERNAL (unmanaged) upstream of THIS domain's
+      #       REST asset - exactly what the Anypoint MCP wizard's "Create new unmanaged
+      #       upstream" does (DOCUMENTED Exchange v2 POST .../instances/external);
+      #       name uif-<domain>-<env>, endpointUri = upstream_url, private; reuse
+      #       exact match; FAIL CLOSED on duplicates or URL drift; captures
+      #       build/mcp/source-instance.json (UUID -> connection.apiVersionId).
+      #    b. inspect the SHARED Bridge by label (documented v1 read) and run the
+      #       identity guards BEFORE any Exchange write; read the MCP asset version
+      #       it binds and that version's published metadata (the other domains' tools).
+      #    c. shared MCP asset: merge this domain's tools/connection into it (every
+      #       other domain's preserved), resolve the version from Exchange
+      #       (identical -> reuse | absent -> 1.0.0 | changed -> patch bump), publish
+      #       only if the Bridge will change (frozen publish guard).
+      #    d. Bridge absent  -> CREATE (provision_bridge: collision preflight,
+      #                        gatewayVersion discovery, marker sweep, ONE xapi POST,
+      #                        v1 read-back; --require-connection => never connection-less)
+      #       route absent   -> ADD    (update_bridge: PATCH the same instance with
+      #                        every existing route preserved + the new route)
+      #       route changed  -> UPDATE IN PLACE (PATCH same instance + router + this
+      #                        route's transcoding policy; read-back: same id/label/
+      #                        path/TLS, new versions/tools, unchanged policy ids,
+      #                        EVERY other route unchanged)
+      #       identical      -> NO-OP (no write)
+      #       ambiguous / unexpected identity or state -> REFUSE, nothing written
+      #    Never deletes or recreates a Bridge; never removes another domain's route.
+      #    Writes build/mcp/shared-mcp-metadata.json = what the Bridge serves now.
+      - name: Deploy Bridge (ensure upstream -> shared asset -> CREATE | ADD | UPDATE | NO-OP)
+        run: |
+          python "$TOOLING_DIR"/scripts/deploy_bridge.py \
+            --config domains/${{ inputs.domain }}/src/mcp/bridge-config.yaml \
+            --artifacts build/mcp \
+            --environment "${{ inputs.environment }}" \
+            --release-file build/mcp/release.json \
+            --out build/mcp \
+            --execute
+
+      # ── Stage 5: MCP conformance — initialize + tools/list ONLY (tools/call
+      #    is impossible by construction, and is NOT an acceptance criterion
+      #    while the temporary bootstrap upstream is in place). The shared Bridge
+      #    lists the tools of EVERY domain, so the expected set is the MERGED
+      #    metadata deploy_bridge just bound. Flex Gateway pulls the new
+      #    configuration asynchronously, so the check is retried within a
+      #    BOUNDED window (6 x 10s) for propagation only; the final attempt decides.
+      - name: Conformance (initialize + tools/list)
+        run: |
+          python "$TOOLING_DIR"/scripts/mcp_conformance.py \
+            --mcp-url "https://${{ needs.live.outputs.gateway_public_host }}/${{ needs.generate.outputs.base_path }}/mcp" \
+            --expected-metadata build/mcp/shared-mcp-metadata.json \
+            --retries 6 --retry-delay 10 \
+            --execute

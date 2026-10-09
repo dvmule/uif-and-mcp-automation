@@ -1,0 +1,97 @@
+/*
+  Pearson corporate brand tokens.
+  Drop this file into any HTML/CSS project and use the variables below
+  instead of hardcoding hex values. See ../references/colors.md and
+  ../references/typography.md for the full rules behind these tokens.
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+
+:root {
+  /* Typography */
+  --font-brand: "Plus Jakarta Sans", Helvetica, Verdana, sans-serif;
+
+  /* Primary colors */
+  --pearson-purple: #0D004D;   /* anchor */
+  --white: #FFFFFF;
+  --light-purple: #C1BFFF;
+  --mist-purple: #EDECF6;
+
+  /* Secondary */
+  --amethyst: #512EAB;
+
+  /* Accents */
+  --turquoise: #56E2E1;
+  --amber: #FFCE00;
+  --fuchsia: #DF41CF;
+
+  /* Accent tints (differentiation only, not default) */
+  --turquoise-tint: #B3F2F1;
+  --amber-tint: #FFE67F;
+  --fuchsia-tint: #EFA0E7;
+
+  /* Tertiary */
+  --ux-black: #333333;
+  --black: #000000; /* print only, never digital */
+
+  /* Data viz — Turquoise scale */
+  --dv-turquoise-core: #56E2E1;
+  --dv-turquoise-dark-1: #168584;
+  --dv-turquoise-dark-2: #1CA5A4;
+  --dv-turquoise-mid-1: #22C7C6;
+  --dv-turquoise-mid-2: #3FD4D3;
+  --dv-turquoise-light-1: #7CE8E7;
+  --dv-turquoise-light-2: #9AEEED;
+  --dv-turquoise-light-3: #ABF1EF;
+  --dv-turquoise-light-4: #BAF3F2;
+  --dv-turquoise-light-5: #CBF6F5;
+
+  /* Data viz — Amber scale */
+  --dv-amber-core: #FFCE00;
+  --dv-amber-dark-1: #7F6701;
+  --dv-amber-dark-2: #9E8001;
+  --dv-amber-mid-1: #BF9A00;
+  --dv-amber-mid-2: #DFB400;
+  --dv-amber-light-1: #FFD846;
+  --dv-amber-light-2: #FFE266;
+  --dv-amber-light-3: #FFE781;
+  --dv-amber-light-4: #FEF0B4;
+  --dv-amber-light-5: #FEEB99;
+
+  /* Data viz — Fuchsia scale */
+  --dv-fuchsia-core: #DF41CF;
+  --dv-fuchsia-dark-1: #7B1571;
+  --dv-fuchsia-dark-2: #991B8D;
+  --dv-fuchsia-mid-1: #B820A9;
+  --dv-fuchsia-mid-2: #CC32BC;
+  --dv-fuchsia-light-1: #E66BD9;
+  --dv-fuchsia-light-2: #EC8DE2;
+  --dv-fuchsia-light-3: #EFA0E7;
+  --dv-fuchsia-light-4: #F6C8F1;
+  --dv-fuchsia-light-5: #F1B3EB;
+
+  /* Data viz — Amethyst scale */
+  --dv-amethyst-core: #512EAB;
+  --dv-amethyst-dark-1: #290066;
+  --dv-amethyst-dark-2: #330B77;
+  --dv-amethyst-mid-1: #3D1788;
+  --dv-amethyst-mid-2: #472399;
+  --dv-amethyst-light-1: #653FC6;
+  --dv-amethyst-light-2: #7950E2;
+  --dv-amethyst-light-3: #9677F0;
+  --dv-amethyst-light-4: #CAB7FF;
+  --dv-amethyst-light-5: #B79BFE;
+}
+
+body {
+  font-family: var(--font-brand);
+  font-variant-ligatures: none;
+  color: var(--pearson-purple);
+  background: var(--white);
+}
+
+/* Reference utility classes — optional, delete if not needed */
+.bg-dark   { background: var(--pearson-purple); color: var(--white); }
+.bg-light  { background: var(--light-purple);   color: var(--pearson-purple); }
+.bg-mist   { background: var(--mist-purple);    color: var(--pearson-purple); }
+.bg-amethyst { background: var(--amethyst);     color: var(--white); }

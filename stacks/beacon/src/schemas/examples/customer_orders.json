@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+
+  "sources": [
+    {"name": "customer", "path": "s3://bucket/raw/customers/", "format": "parquet"},
+    {"name": "orders",   "path": "s3://bucket/raw/orders/",    "format": "json"}
+  ],
+
+  "joins": [
+    {
+      "left": "customer", "right": "orders", "type": "inner",
+      "condition": "customer.customer_id = orders.customer_id"
+    }
+  ],
+
+  "mappings": [
+    {"type": "one_to_one",  "source": "orders.order_id", "target": "order_id", "data_type": "string"},
+
+    {"type": "many_to_one",
+     "sources": ["customer.first_name", "customer.last_name"],
+     "target": "customer_name",
+     "expression": "concat_ws(' ', customer.first_name, customer.last_name)"},
+
+    {"type": "one_to_many",
+     "source": "customer.full_address",
+     "targets": ["address_line1", "address_line2"],
+     "expressions": ["split(customer.full_address, ',')[0]",
+                     "trim(split(customer.full_address, ',')[1])"]},
+
+    {"type": "literal", "target": "source_system", "value": "crm"},
+    {"type": "literal", "target": "load_ts",       "value": "${run_timestamp}"},
+    {"type": "derived", "target": "gross_amount",  "expression": "orders.order_total + orders.tax"}
+  ],
+
+  "validations": [
+    {"name": "order_id_not_null",     "condition": "order_id IS NOT NULL"},
+    {"name": "gross_amount_positive", "condition": "gross_amount > 0"}
+  ],
+  "rejected_path": "s3://bucket/rejected/${batch_id}/",
+
+  "output": {
+    "targets": [
+      {"format": "parquet", "path": "s3://bucket/output/enriched/", "mode": "overwrite"},
+      {"format": "json",    "path": "s3://bucket/output/json/",     "mode": "overwrite"}
+    ]
+  },
+  "policies": {"on_empty_input": "fail"}
+}

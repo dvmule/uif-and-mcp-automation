@@ -1,0 +1,19 @@
+# Gold pipeline: product — dev overlay (deep-merged over pipelines/base/product.yaml).
+# Only per-environment values belong here.
+
+enabled: true
+
+schema:
+  master_s3_path: s3://uif-echo-dev-gold-artifacts/schemas/gold/product/v1/master.json
+
+mapping:
+  manifest_s3_path: s3://uif-echo-dev-gold-artifacts/mappings/product/v1/manifest.yaml
+  sql_s3_path: s3://uif-echo-dev-gold-artifacts/mappings/product/v1/sql/product.sql
+
+target:
+  s3_path: s3://uif-echo-dev-gold/product/
+
+# {token} values the transform splices into the mapping SQL (UIFPE-253):
+# marketingCopy.contentUrl carries the content service's per-env gateway base.
+sql_vars:
+  content_url_base: https://api1-dev.pearson.com/uif/v1

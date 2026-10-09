@@ -1,0 +1,6 @@
+# One build's release hashes, written by scripts/stage-release-artifacts.sh (dev) or
+# the promotion. Loaded automatically by terraform; a tracked or stale copy
+# would pin the next plan to another build's artifacts.
+artifacts.auto.tfvars.json
+# archive_file output, from before the root read its code from S3.
+.build/

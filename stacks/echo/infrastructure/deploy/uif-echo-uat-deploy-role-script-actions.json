@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SyncPipelinesScansTheGoldConfigTableToDiffBeforeWriting",
+      "Effect": "Allow",
+      "Action": "dynamodb:Scan",
+      "Resource": "arn:aws:dynamodb:eu-west-1:283556840805:table/uif-echo-uat-gold-pipeline-config"
+    }
+  ]
+}

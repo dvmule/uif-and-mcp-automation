@@ -1,0 +1,33 @@
+{
+  "customer_id": { "S": "pdz" },
+  "domain_detail_type": { "S": "program#program.created.v1" },
+  "subscription_id": { "S": "4176533b-b493-40d9-bbc2-25a687f3305c" },
+  "policy_sid": { "S": "uif4176533bb49340d9bbc225a687f3305c" },
+  "domain": { "S": "program" },
+  "operation": { "S": "created" },
+  "version": { "S": "v1" },
+  "detail_type": { "S": "program.created.v1" },
+  "rule_name": { "S": "uif-event-dev-on-program-program-created-v1-pdz" },
+  "target": { "M": {
+    "target_type": { "S": "KINESIS" },
+    "target_arn": { "S": "arn:aws:kinesis:eu-west-1:283556840805:stream/uif-event-dev-pdz-program-program-created-v1" },
+    "target_config": { "M": {
+      "consumer_principal_arn": { "S": "arn:aws:iam::283556840805:root" },
+      "partition_key_path": { "S": "$.detail.partitionkey" },
+      "retry_policy": { "M": {
+        "max_attempts": { "N": "3" },
+        "max_age_seconds": { "N": "900" }
+      } }
+    } }
+  } },
+  "target_arn": { "S": "arn:aws:kinesis:eu-west-1:283556840805:stream/uif-event-dev-pdz-program-program-created-v1" },
+  "status": { "S": "PENDING" },
+  "status_reason": { "NULL": true },
+  "record_version": { "N": "1" },
+  "created_at": { "S": "2026-09-30T00:00:00Z" },
+  "created_by": { "S": "aparajita.konwar@pearson.com (UIFPE-401 pdz program onboarding)" },
+  "updated_at": { "S": "2026-09-30T00:00:00Z" },
+  "updated_by": { "S": "aparajita.konwar@pearson.com" },
+  "deleted_at": { "NULL": true },
+  "deleted_by": { "NULL": true }
+}

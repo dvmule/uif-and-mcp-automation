@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.pearson.com/program/program-created-data/v1",
+  "registry": {
+    "group": "program",
+    "artifact": "program-created-data",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "title": "ProgramCreated data payload",
+  "type": "object",
+  "properties": {
+    "programId": {
+      "type": "string",
+      "description": "Pearson Program Identifier"
+    },
+    "description": {
+      "type": "string",
+      "description": "Program Description (Internal)"
+    },
+    "longDescription": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Description (External)"
+    },
+    "relevanceValue": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Program Relevance Value"
+    },
+    "programFamilyCatalogCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Display Catalog"
+    },
+    "coverImageLargeUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Image URL (Large)"
+    },
+    "programOwnerName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Owner"
+    },
+    "inventoryItemStatus": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Inventory item status code"
+    },
+    "parentProductId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Parent Product of the Program"
+    },
+    "associatedProducts": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Associated Products",
+      "items": {
+        "type": "string"
+      }
+    },
+    "relatedPrograms": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Related Programs",
+      "items": {
+        "type": "object",
+        "properties": {
+          "relatedProgramId": {
+            "type": "string",
+            "description": "PPID of the related program"
+          },
+          "relationshipType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Type of the relationship between the programs"
+          }
+        },
+        "required": [
+          "relatedProgramId"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "programId"
+  ],
+  "additionalProperties": false
+}

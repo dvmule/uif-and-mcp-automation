@@ -1,0 +1,40 @@
+{
+  "specversion": "1.0",
+  "id": "550e8400-e29b-41d4-a716-446655440010",
+  "source": "urn:pearson:svc:program-service",
+  "type": "com.pearson.program.program.created.v1",
+  "time": "2026-08-13T06:30:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "https://schemas.pearson.com/program/program-created-data/v1",
+  "subject": "program/P2100245",
+  "correlationid": "a7c3e1d4-6b28-4f5a-9e11-2d8f4b6a90c3",
+  "partitionkey": "P2100245",
+  "channel": "event",
+  "dataclassification": "internal",
+  "piipresent": false,
+  "data": {
+    "programId": "P2100245",
+    "description": "Revel for Introductory Psychology 5e",
+    "longDescription": "Revel for Introductory Psychology, 5th edition — 12-month digital programme bundling the core text, adaptive practice and instructor resources.",
+    "relevanceValue": 40,
+    "programFamilyCatalogCode": "HigherEducation",
+    "coverImageLargeUrl": "https://images.pearson.com/i/79475d28-e560-442f-9d0c-afceca8a145a/P2100245_lg.jpg",
+    "programOwnerName": "Global Higher Education Editorial",
+    "inventoryItemStatus": "ACTIVE",
+    "parentProductId": "A1002345",
+    "associatedProducts": [
+      "A1002345",
+      "A1002346"
+    ],
+    "relatedPrograms": [
+      {
+        "relatedProgramId": "P2100301",
+        "relationshipType": "Substitute"
+      },
+      {
+        "relatedProgramId": "P2100412",
+        "relationshipType": "Superseded By"
+      }
+    ]
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.pearson.com/gold/program/event-updated/v1/schema.json",
+  "registry": {
+    "group": "program",
+    "artifact": "program.program.event-updated",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "title": "Program (event-updated)",
+  "description": "The `data` block of a program updated event as delivered on the event channel (SQS): the Gold master projected onto attributes whose x-channels includes 'event'. The projection is identical for every operation; the operation is carried by the coordinate so the contracts can version independently.",
+  "metadata": {
+    "domain": "program",
+    "entity": "program",
+    "version": "v1",
+    "dataClassification": "internal",
+    "channel": "event",
+    "operation": "updated",
+    "transport": "SQS",
+    "source": "domains/program/src/schemas/gold/program/v1/master.json",
+    "audience": "consumer"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "programId"
+  ],
+  "properties": {
+    "programId": {
+      "type": "string",
+      "description": "Pearson Program Identifier"
+    },
+    "description": {
+      "type": "string",
+      "description": "Program Description (Internal)"
+    },
+    "longDescription": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Description (External)"
+    },
+    "relevanceValue": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Program Relevance Value"
+    },
+    "programFamilyCatalogCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Display Catalog"
+    },
+    "coverImageLargeUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Image URL (Large)"
+    },
+    "programOwnerName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Owner"
+    },
+    "inventoryItemStatus": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Inventory item status code"
+    },
+    "parentProductId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Parent Product of the Program"
+    },
+    "associatedProducts": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Associated Products",
+      "items": {
+        "type": "string"
+      }
+    },
+    "relatedPrograms": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Related Programs",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "relatedProgramId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PPID of the related program"
+          },
+          "relationshipType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Type of the relationship between the programs"
+          }
+        }
+      }
+    }
+  },
+  "$comment": "GENERATED from domains/program/src/schemas/gold/program/v1/master.json by stacks/echo/src/apps/cli/generate_tier_subsets.py — do not hand-edit; regenerate. A committed copy is transitional: the schema registry is the destination for consumers."
+}

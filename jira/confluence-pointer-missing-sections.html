@@ -1,0 +1,56 @@
+<!-- Paste into live Confluence page 1261241098 if only Smart Commits block exists today.
+     Prefer full replace from confluence-pointer-publish.html when possible. -->
+
+<div data-type="panel-info">
+<h2>What this page is</h2>
+<table>
+<thead><tr><th>System</th><th>Role</th><th>Source of truth</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>GitHub</strong></td>
+<td>Code, standards, CI/CD definitions</td>
+<td><a href="https://github.com/pearson-dnt-coe/universal-Integration-framework">universal-Integration-framework</a></td>
+</tr>
+<tr>
+<td><strong>Jira (UIFPE)</strong></td>
+<td>Work, traceability, workflow</td>
+<td><a href="https://pearson.atlassian.net/jira/software/projects/UIFPE">UIFPE project</a></td>
+</tr>
+<tr>
+<td><strong>Confluence</strong></td>
+<td>Links and cheat-sheets only</td>
+<td><a href="https://pearson.atlassian.net/wiki/spaces/UIF/overview">UIF space</a> — updated when repo or Jira model changes</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<h2>Domain epics (live in UIFPE)</h2>
+<p>Parent for delivery work = Domain epic. Capability = label only.</p>
+<table>
+<thead><tr><th>Domain</th><th>Label</th><th>GitHub path</th><th>Jira key</th></tr></thead>
+<tbody>
+<tr><td>Product</td><td><code>domain:product</code></td><td><code>domains/product/</code></td><td><strong>UIFPE-51</strong></td></tr>
+<tr><td>Customer</td><td><code>domain:customer</code></td><td><code>domains/customer/</code></td><td><strong>UIFPE-52</strong></td></tr>
+<tr><td>SKU</td><td><code>domain:sku</code></td><td><code>domains/sku/</code></td><td><strong>UIFPE-53</strong></td></tr>
+<tr><td>Finance</td><td><code>domain:finance</code></td><td><code>domains/finance/</code></td><td><strong>UIFPE-54</strong></td></tr>
+<tr><td>HR</td><td><code>domain:hr</code></td><td><code>domains/hr/</code></td><td><strong>UIFPE-55</strong></td></tr>
+<tr><td>Legal</td><td><code>domain:legal</code></td><td><code>domains/legal/</code></td><td><strong>UIFPE-56</strong></td></tr>
+<tr><td>Identity</td><td><code>domain:identity</code></td><td><code>domains/identity/</code></td><td><strong>UIFPE-57</strong></td></tr>
+<tr><td>Orders</td><td><code>domain:orders</code></td><td><code>domains/orders/</code></td><td><strong>UIFPE-109</strong></td></tr>
+<tr><td>Tax</td><td><code>domain:tax</code></td><td><code>domains/tax/</code></td><td><strong>UIFPE-110</strong></td></tr>
+<tr><td>Subscriptions</td><td><code>domain:subscriptions</code></td><td><code>domains/subscriptions/</code></td><td><strong>UIFPE-111</strong></td></tr>
+</tbody>
+</table>
+
+<h3>GitHub Actions auto-transition (Phase 2 — admin-owned)</h3>
+<p><strong>401</strong> on <code>jira-transition.yml</code> — Atlassian admin action. Engineers rely on Smart Commits.</p>
+
+<h2>Jira Automation (required — one-time admin setup)</h2>
+<table>
+<thead><tr><th>When issue transitions to</th><th>Action (required)</th></tr></thead>
+<tbody>
+<tr><td><strong>Code Review</strong></td><td>Assign to and/or comment-mention the PR reviewer(s)</td></tr>
+<tr><td><strong>Ready for QA</strong></td><td>Assign to and/or comment-mention the domain’s QE Lead</td></tr>
+</tbody>
+</table>

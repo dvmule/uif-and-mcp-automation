@@ -1,0 +1,20 @@
+# What one row of each Gold table IS, and the column that narrows it
+# (UIFPE-607, owner decision 2026-09-25). Keyed by Gold TABLE name; copied
+# onto the live table record by registries.gold_tables so the wizard can say
+# on the Source, Mapping, Filter and Review steps what a row will be —
+# "Each row is one product per organization, per copy" — and which column
+# keeps fewer of them. Declared here, never inferred from column names; a
+# table without an entry simply says nothing. Relationship joins carry their
+# own `row` in relationships.yaml.
+product:
+  row: one row per product per organization
+  narrow_by: [organization_code]
+stock:
+  row: one row per product per organization
+  narrow_by: [organization_code]
+price:
+  row: one row per product
+program:
+  row: one row per program
+marketing_copy:
+  row: one row per copy

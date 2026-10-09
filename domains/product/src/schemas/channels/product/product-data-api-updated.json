@@ -1,0 +1,992 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.pearson.com/gold/product/api-updated/v1/schema.json",
+  "registry": {
+    "group": "product",
+    "artifact": "product.product.api-updated",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "title": "Product (api-updated)",
+  "description": "The `data` block of a product updated event as delivered on the api channel (webhook / API destination): the Gold master projected onto attributes whose x-channels includes 'api'. The projection is identical for every operation; the operation is carried by the coordinate so the contracts can version independently.",
+  "metadata": {
+    "domain": "product",
+    "entity": "product",
+    "version": "v1",
+    "dataClassification": "internal",
+    "channel": "api",
+    "operation": "updated",
+    "transport": "webhook / API destination",
+    "source": "domains/product/src/schemas/gold/product/v1/master.json",
+    "audience": "consumer"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "productId"
+  ],
+  "properties": {
+    "productId": {
+      "type": "string",
+      "description": "Item, also known as PPID (Pearson Product Identifier) — the unique identifier used within PDH to distinguish one item from another."
+    },
+    "isbn13": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "International Standard Book Number auto-assigned to items in PDH; generally assigned to sellable items in the Higher Education, Schools and English Language Learning lines of business."
+    },
+    "isbn10": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "ISBN-10"
+    },
+    "sourceItemNumber": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Source Item Number: the item's identifier in the originating source system, as held in PDH's product identification group."
+    },
+    "parentProductId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "PPID of the Item deemed the head of household within this product's program family; equivalent to ISBN13 (Parent), and self-associated on the product deemed the parent."
+    },
+    "organizationCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Alphanumeric organization (Org) code whose numeric part represents the region (e.g. 01 = UK, 02 = Canada) and whose letter represents a particular warehouse; from Oracle inventory organizations."
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Description (Internal)"
+    },
+    "longDescription": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Description (External)"
+    },
+    "inventoryItemStatus": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Item Status (Oracle) — the availability status of the item (e.g. ACTIVE). Highly governed: changes require approval by key business stakeholders who are closest to a product's actual availability."
+    },
+    "itemType": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Core PDH attribute (User Item Type) indicating whether a product is physical, digital, sold individually, as a pack, a subscription, or a combination thereof."
+    },
+    "lineOfBusiness": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Indicates which internal Pearson business an item belongs to; Higher Education, Schools, English Language Teaching and Clinical Assessment are the four most common values."
+    },
+    "ipOwnerCategory": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "IP Owner"
+    },
+    "copyrightYear": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "The year in which the copyright of the content is filed with the respective Copyright offices; generally the year of first publication of the item, though exact rules vary across business regions."
+    },
+    "editionNumber": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Numeric value representing the edition of the product. Businesses that offer courses or services rather than products must set it to 1 when the item flows into IPM Fadel for rights clearance or royalties."
+    },
+    "owningSubsidiaryCountryCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The official name of the country identified in the Owning Subsidiary."
+    },
+    "owningSubsidiaryName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Identifies the Pearson source (owner) of the product; interface rules reference it to populate segment 2 of the IP Ownership four-segment attribute in Oracle EBS."
+    },
+    "deliveryMethod": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The way in which the customer receives a product or service from Pearson."
+    },
+    "brand": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Public brand name of the product; an official Brand is generally cleared by legal and filed with Trademark offices, and may be a Pearson or third-party value. Often a pre-requisite to Sub Brand and Product URL."
+    },
+    "subBrand": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Further defines a product within its Brand; dependent on Brand. An official Sub Brand is generally cleared by legal and filed with Trademark offices, and may be a Pearson or third-party value."
+    },
+    "digitalPlatform": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The underlying technical platform that drives a digital product; used inconsistently across businesses and generally expected to be replaced by Enabling Technology (Levels 1 & 2)."
+    },
+    "disciplineLevel1": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Discipline (Level 1) — first of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science); the hierarchy drives the EPT and PIA taxonomies."
+    },
+    "disciplineLevel2": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Discipline (Level 2) — second of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science)."
+    },
+    "disciplineLevel3": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Discipline (Level 3) — third of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science)."
+    },
+    "disciplineLevel4": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Discipline (Level 4) — fourth of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science)."
+    },
+    "productClassificationLevel1": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Product Classification (Level 1) — broadly defines the product (formerly Product Type); dependent on Item Type, and a primary attribute in the data requirements for external catalogs (Pearson.com, OneCRM, Onix feeds)."
+    },
+    "productClassificationLevel2": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Product Classification (Level 2) — defines the format of the product (formerly Sub Medium); used with Product Classification (Level 1), Brand and Sub Brand to identify product types in external catalogs."
+    },
+    "languageLevel1": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Language (Level 1) — the language the product is written in; the country of the regional variation is carried in Language (Level 2)."
+    },
+    "languageLevel2": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Language (Level 2) — the country of the regional variation of the language (British English vs US English; Mexican Spanish vs Spain Spanish)."
+    },
+    "learnerStageLevel1": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Learner Stage (Level 1) — first tier of a two-tier hierarchy indicating the item's place on the customer's lifelong learning journey; values generally correlate to a level of education."
+    },
+    "learnerStageLevel2": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Learner Stage (Level 2) — second tier of the two-tier hierarchy indicating the item's place on the customer's lifelong learning journey; values generally correlate to a level of education."
+    },
+    "nonDisclosureAgreementIndicator": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "When Yes, prevents an item going into external feeds before it is expected to. A legacy catch-all for the External Communication Indicator and Web Consuming System, used only in the US IT Professional division."
+    },
+    "digitalEffectiveStartDate": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date",
+      "description": "Date the product version becomes active."
+    },
+    "digitalVersionNumber": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Product version identifier."
+    },
+    "unitWeightQuantity": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Weight of the product."
+    },
+    "weightUomCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Unit of measure for weight."
+    },
+    "unitLengthQuantity": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Length of the product."
+    },
+    "unitWidthQuantity": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Width of the product."
+    },
+    "unitHeightQuantity": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "Height of the product."
+    },
+    "dimensionUomCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Unit of measure for dimentions."
+    },
+    "qualificationLevelName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Qualification or certification level."
+    },
+    "finalTextPageCount": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Final Text Page Count — a production and supply chain attribute defining the number of pages within a text. Required for all printed book products and all eBook products."
+    },
+    "fulfillmentOrgDetails": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Org-level fulfillment attributes — one object per (item, org) row. Conditional by Digital Catalog; on the digital side, titleStatusCode and regionalPublicationDate proliferate by UK/non-UK org group, where UK means organizationCode starts 01. NULL (not an empty object) when every field is null — business rule 2026-08-07.",
+      "additionalProperties": false,
+      "properties": {
+        "sellingRestrictionCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Sales Restriction: whether the product's sale is restricted to or from a specific audience (e.g. Schools, Oasis, Trade, Direct). In North America it is checked ahead of any Rights or Market Restriction."
+        },
+        "discountCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Discount Type: triggers the Oracle EBS calculation that determines the rate of discount due on the item for the most common customer types. Values vary by PDH organization and reflect local business practice."
+        },
+        "titleStatusCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Title Status"
+        },
+        "regionalPublicationDate": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date",
+          "description": "Regional Publication Date: the date on which the product is available for transaction within this organization (e.g. 03B = US, 02B = Canada, 01E = UK); connected to Publication Date outside the Owning Subsidiary."
+        },
+        "returnClassCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Returns Class: tells Supply Chain whether the item is eligible for return; values are Always or Never — digital products are generally Never and most physical products Always."
+        },
+        "imprintName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Imprint: the name of the publisher, typically Pearson for most lines of business; some business areas persist with older values such as Addison-Wesley or Pearson Learning Solutions."
+        },
+        "productTaxClassificationCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Product Tax Classification: triggers the Oracle EBS calculation of how much tax/VAT, if any, the customer owes on the product. Values vary by PDH organization and align with each country's tax laws."
+        },
+        "relevanceValue": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Relevance Value: part of the Product Relevance group that drives product visibility and sales prioritization across Pearson catalogs, predominantly OneCRM. Held per fulfillment organization."
+        },
+        "marketingInitiative": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "Marketing Initiative: associates the product with strategic initiatives for this fulfillment organization, with each initiative's start and end dates; populated on saleable products only.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "marketingInitiativeName": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Marketing initiative name"
+              },
+              "marketingInitiativeStartDate": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date",
+                "description": "Date the initiative starts for this product and organization"
+              },
+              "marketingInitiativeEndDate": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date",
+                "description": "Date the initiative ends for this product and organization"
+              }
+            }
+          }
+        },
+        "backOrderIndicator": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Back Order Flag"
+        },
+        "defaultSalesOrderSourceTypeCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default sales order source type for the fulfillment organization"
+        },
+        "readyForManufactureCode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Ready for Manufacture: the fulfillment organization's manufacturing-readiness status for the item (for example IF Ready to Print, HELD_QUALITY, NO_COMP, NO_PACK)."
+        }
+      }
+    },
+    "accessDurationType": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Access Duration Type — one of the three Access Duration attributes that together reflect how long a customer can use a product; 'N/A' where the product may be offered with multiple durations."
+    },
+    "accessDurationQuantity": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Access Duration Value — one of the three Access Duration attributes that together reflect how long a customer can use a product; required for subscription-based products with a single, definable access length."
+    },
+    "accessDurationUnitCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Access Duration Unit — one of the three Access Duration attributes (Type, Value, Unit) that together reflect how long a customer can use a product."
+    },
+    "courseDurationQuantity": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Course Duration Value — with Course Duration Unit, represents the length of time a course will take to complete; distinct from Access Duration, which is how long a customer can access the materials."
+    },
+    "courseDurationUnitCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Course Duration Unit — with Course Duration Value, represents the length of time a course will take to complete; distinct from Access Duration, which is how long a customer can access the materials."
+    },
+    "coverImageLargeUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Large product image URL. The URL indicates whether a product image has been loaded into Alfresco so it can be displayed within PDH, on Pearson's catalogs, or on non-Pearson sites through the Onix feeds."
+    },
+    "coverImageRegularUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Regular product image URL. The URL indicates whether a product image has been loaded into Alfresco so it can be displayed within PDH, on Pearson's catalogs, or on non-Pearson sites through the Onix feeds."
+    },
+    "coverImageHighResolutionUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Product Image URL (High Res)"
+    },
+    "contributors": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Multi-row Contributor group associating information about the author, contributor, or editor to the product record; details should be maintained based on the region that holds the contract with that contributor.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contributionRoleCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contributor Type — indicates whether the contributor is an individual person or an entity (e.g. Pearson Education, NCCER)."
+          },
+          "contributorSortSequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Contributor Rank — the order the contributor should appear on an item; the lead author/contributor has a Rank of '1', the second author '2', and so on."
+          },
+          "contributorPreNominalTitle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title preceding the contributor's name (e.g. Dr)"
+          },
+          "contributorGivenName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contributor given name"
+          },
+          "contributorAdditionalName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contributor middle name(s)"
+          },
+          "contributorFamilyName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Contributor family name"
+          },
+          "contributorPostNominalTitle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Qualifications following the contributor's name"
+          },
+          "affiliationType1": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Type of the contributor's first affiliation"
+          },
+          "affiliation1": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The contributor's first affiliation"
+          },
+          "affiliationType2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Type of the contributor's second affiliation"
+          },
+          "affiliation2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The contributor's second affiliation"
+          },
+          "affiliationType3": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Type of the contributor's third affiliation"
+          },
+          "affiliation3": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The contributor's third affiliation"
+          }
+        }
+      }
+    },
+    "webConsumingSystem": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Regional Pearson catalogs the product data is sent to, each with its end date — a Web Consuming System value cannot be removed once associated and must be end-dated.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "wcsName": {
+            "type": "string",
+            "description": "Name of the regional Pearson catalog the product data is sent to, e.g. WEB_IPM. Always present — an element with no system name is not emitted."
+          },
+          "endDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date this consuming-system association is end-dated — a Web Consuming System value cannot be removed once associated, only end-dated (ECI_RELEASE_DATE)."
+          }
+        }
+      }
+    },
+    "associatedPrograms": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "PPIDs of the Programs this product is associated with — a Program is an organizational construct that groups products together based on market-driven offers.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "marketingCopy": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Multi-row group relating marketing copy content created in the Marketing Copy UI to items within PDH.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Marketing Copy ID provided by the Marketing Copy UI when the content is created; this Copy ID is what is enriched against the item in PDH."
+          },
+          "marketingCopyText": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Marketing copy text"
+          },
+          "marketingCopyTypeCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Marketing copy type"
+          },
+          "audienceCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Intended audience for the marketing copy"
+          },
+          "geoVisibilityCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Geographic visibility of the marketing copy"
+          },
+          "owningMarketCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Market that owns the marketing copy"
+          },
+          "contentUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Retrieval URL for the full marketing copy — the content service (UIFPE-254) serves it on demand; null when the entry has no contentId. The content itself never rides feeds (claim-check pattern)."
+          }
+        }
+      }
+    },
+    "standardComponents": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Components of this product's Pearson Standard BOM ('Pearson Standard' structure) — generally two or more of the same or multiple components whose BOM Enabled Flag = Yes.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "componentProductId": {
+            "type": "string",
+            "description": "PPID of the component item in this Pearson Standard BOM — the unique identifier used within PDH to distinguish one item from another."
+          },
+          "sequenceNumber": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Component sequence number in the bill of materials"
+          },
+          "componentQuantity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Component quantity"
+          },
+          "componentEffectiveDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date the component becomes effective"
+          },
+          "componentFinalPageCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Final page count of the component"
+          },
+          "discountType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Discount type for the component"
+          },
+          "discountAmount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Discount value for the component"
+          },
+          "componentDisabledDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date the component was disabled"
+          }
+        }
+      }
+    },
+    "customComponents": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Components of this product's Pearson Custom BOM, also known as a 'Royalty BOM' ('PEARSON_CUSTOM' structure) — at least one component allocates royalties to an author.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "componentProductId": {
+            "type": "string",
+            "description": "PPID of the component item in this Pearson Custom BOM — the unique identifier used within PDH to distinguish one item from another."
+          },
+          "originalWorkPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percentage of an original work for this component — one of the additional values a Custom BOM must define, alongside number of pages."
+          },
+          "customWorkPercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Custom allocation percentage for this component; Custom BOMs are allocated via a percentage in which the total custom percent = 100."
+          },
+          "componentEffectiveDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date the component becomes effective"
+          },
+          "componentFinalPageCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Number of pages for this custom BOM component — one of the additional values a Custom BOM must define, alongside percentage of an original work."
+          },
+          "overridePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Override percentage"
+          },
+          "componentDisabledDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date the component was disabled"
+          }
+        }
+      }
+    },
+    "categories": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Category assignments from the in-scope category sets (EPT, POA, Private Pay (POA)), with the full parent-to-mapped hierarchy path; EPT is a global catalog taxonomy auto-populated from Discipline (Levels 1-4).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "categorySetName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Category set the assignment belongs to, e.g. EPT. Called \"Category Name\" in the business extract."
+          },
+          "categoryCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Business code of the mapped category (MTL_CATEGORIES_B.SEGMENT1). Distinct from categoryId, which is the surrogate key."
+          },
+          "categoryName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "US label of the mapped category, e.g. Aerodynamics. Null where the category has no US description."
+          },
+          "categoryHierarchyPath": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full path from the root down to and including the mapped category, joined with ' > ' — e.g. \"Engineering > Mechanics > Aerodynamics\". A category mapped at the top level yields just its own name. The separator is ' > ' and NOT the slash the business writes these paths with: 3.6% of in-scope category labels contain a '/' of their own (\"DC / AC Circuits\", \"CAD / CAM / CIM\"), which would make a slash-joined path impossible to split reliably. '>' appears in no US category label in the catalog. Safe to split on ' > ', and prefix-matchable: hierarchy LIKE 'Engineering > %' selects everything below Engineering."
+          },
+          "ecatalogIncludeIndicator": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Source e-catalog inclusion flag for the mapped category (MTL_CATEGORIES_B.ATTRIBUTE8), carried through verbatim — a Y/N string, not a boolean."
+          },
+          "categoryDisabledDate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Date the mapped category was disabled (MTL_CATEGORIES_B.DISABLE_DATE). Null while the category is active. Assignments are NOT filtered on this — consumers decide whether a disabled category still counts."
+          }
+        }
+      }
+    },
+    "enablingTechnology": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Multi-row, 2-level attribute identifying which Pearson or third-party technologies underpin the item; these can include mobile, content and interactive capabilities. Held as (level 1, level 2) pairs.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enablingTechnologyLevel1": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Enabling Technology (Level 1) — first level of the multi-row, 2-level attribute identifying which Pearson or third-party technologies underpin the item; e.g. Platform, Content Capability, Third Party."
+          },
+          "enablingTechnologyLevel2": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Enabling Technology (Level 2) — second level of the multi-row, 2-level attribute identifying which Pearson or third-party technologies underpin the item; e.g. MyLab, eText 2.0, VitalSource."
+          }
+        }
+      }
+    },
+    "productUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Link that directs customers to a product's purchase or registration page; for some product lines it must be enriched to enable purchase capabilities on Pearson's and external websites."
+    },
+    "instructorResourceFiles": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Instructor Resource Content files for this product — the downloadable assets supplied to instructors, each with its name, location and media status. One-to-many per product, ordered by the rank MDM assigns.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fileName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File name of the instructor resource, as held in MDM (PSO_FILE_PROPERTIES.NAME)."
+          },
+          "fileExtensionCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File extension, e.g. pdf, docx, zip (PSO_FILE_PROPERTIES.EXTENSION)."
+          },
+          "fileSize": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "File size exactly as MDM holds it (PSO_FILE_PROPERTIES.FILE_SIZE). Carried VERBATIM as text: the source column is character-typed and the unit is not guaranteed, so no unit is asserted and no cast is applied."
+          },
+          "linkText": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display text for the download link (PSO_FILE_PROPERTIES.LINK_TEXT)."
+          },
+          "fileUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Location the instructor resource is downloaded from (PSO_FILE_PROPERTIES.URL)."
+          },
+          "mediaFileType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media file type classification (PSO_FILE_PROPERTIES.MEDIA_FILE_TYPE)."
+          },
+          "mediaStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Media status of the file (PSO_FILE_PROPERTIES.MEDIA_STATUS)."
+          },
+          "fileRankSequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Display order MDM assigns the file within the product's set (PSO_FILE_PROPERTIES.RANK). Primary sort key for this array."
+          },
+          "fileDescription": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description of the instructor resource (PSO_FILE_PROPERTIES.DESCRIPTION). Sourced from the TRANSLATIONS table, US language only."
+          }
+        }
+      }
+    }
+  },
+  "$comment": "GENERATED from domains/product/src/schemas/gold/product/v1/master.json by stacks/echo/src/apps/cli/generate_tier_subsets.py — do not hand-edit; regenerate. A committed copy is transitional: the schema registry is the destination for consumers."
+}

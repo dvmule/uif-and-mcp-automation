@@ -1,0 +1,73 @@
+# Spectral ruleset for sync (OpenAPI 3.1) contracts.
+# Naming/security rules this enforces come from ../../../../capabilities/api/guidelines.md;
+# the registry-coordinate rule comes from ../../../../stacks/apicurio/standards/guidelines.md §1.
+extends: [[spectral:oas, "off"]]
+
+rules:
+  uif-registry-coordinate-required:
+    description: Every registered contract must declare its Apicurio group:artifact coordinate (stacks/apicurio/standards/guidelines.md §1).
+    message: "{{error}} — add an x-registry block with group, artifact, compatibility."
+    severity: error
+    given: "$"
+    then:
+      field: x-registry
+      function: truthy
+
+  uif-registry-compatibility-required:
+    description: The compatibility mode must be one of Apicurio's real values, set once per artifact (guidelines.md §2).
+    message: "x-registry.compatibility must be BACKWARD, FORWARD, FULL, or NONE"
+    severity: error
+    given: "$.x-registry.compatibility"
+    then:
+      function: enumeration
+      functionOptions:
+        values: [BACKWARD, FORWARD, FULL, NONE]
+
+  uif-resource-path-no-verbs:
+    description: Resource paths are plural nouns; the HTTP method is the verb (capabilities/api/guidelines.md §1).
+    message: "Path '{{value}}' looks like it contains a verb — use the HTTP method instead"
+    severity: warn
+    given: "$.paths[*]~"
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "/(get|list|create|update|delete|fetch)[a-zA-Z-]*"
+
+  uif-major-version-in-path:
+    description: Version lives in the URL as a major only (capabilities/api/guidelines.md §1).
+    message: "servers[].url should contain /v{major}"
+    severity: error
+    given: "$.servers[*].url"
+    then:
+      function: pattern
+      functionOptions:
+        match: "/v[0-9]+"
+
+  uif-security-required:
+    description: No unauthenticated endpoints (capabilities/api/guidelines.md §4, Secure By Default).
+    message: Every operation must declare a security requirement (top-level or per-operation).
+    severity: error
+    given: "$"
+    then:
+      field: security
+      function: truthy
+
+  uif-4xx-and-5xx-required:
+    description: Every operation documents at least one 4xx and the 5xx case.
+    message: Operation is missing a 4xx and/or 5xx response.
+    severity: warn
+    given: "$.paths[*][*].responses"
+    then:
+      - field: "4XX"
+        function: truthy
+      - field: "5XX"
+        function: truthy
+
+  uif-canonical-ref-not-inlined:
+    description: A field that shadows a canonical shared entity name must $ref the common registry group, never redefine it inline (stacks/apicurio/standards/apicurio-governance.md §3).
+    message: "Property named 'address' or 'money' should $ref https://schemas.pearson.com/common/... instead of an inline schema."
+    severity: warn
+    given: "$.components.schemas[*].properties[address,money]"
+    then:
+      field: $ref
+      function: truthy

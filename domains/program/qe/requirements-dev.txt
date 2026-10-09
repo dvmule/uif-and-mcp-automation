@@ -1,0 +1,21 @@
+# Test dependencies for the program domain's quality gates.
+# Consumed as `pip install -r domains/program/qe/requirements-dev.txt`.
+#
+# Provisional home, matching product's, pending the domain packaging decision
+# (there is no pyproject.toml — qe/conftest.py is the only thing putting the app
+# tree on sys.path).
+#
+# DELIBERATELY SMALLER THAN PRODUCT'S. Program's gates read JSON and YAML and
+# assert on text; they drive no AWS client and no web framework, so boto3,
+# fastapi and httpx are not listed. Versions match product's so the two domains
+# resolve to the same wheels in one CI cache.
+#
+# `pyyaml` and `jsonschema` are here even though the gates themselves only
+# import pytest/json/re: the manifest gates parse YAML, and the shared
+# validate_gold_schemas.py this domain's workflow also runs needs both plus
+# sqlparse. Declaring them here means the workflow does not have to know which
+# transitive tool wants what.
+pytest==9.0.3
+pyyaml==6.0.3
+jsonschema==4.26.0
+sqlparse==0.5.5

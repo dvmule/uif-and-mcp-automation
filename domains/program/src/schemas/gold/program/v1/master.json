@@ -1,0 +1,213 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.pearson.com/gold/program/v1/master.json",
+  "registry": {
+    "group": "program",
+    "artifact": "program.program.gold",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "title": "Program",
+  "description": "Gold entity: Program. Materialized from Oracle EBS PDH (MTL_SYSTEM_ITEMS_B + EGO_MTL_SY_ITEMS_EXT_B). 1 row per (inventoryItemId, organizationId); programs are the PDH items whose SEGMENT1 starts P2 at ORGANIZATION_ID 82. Structure is authored here (the primary artifact); program.mapping.json carries the rules that populate it.",
+  "metadata": {
+    "owner": {
+      "service": "urn:pearson:service:program:catalog-svc",
+      "team": "Enterprise Data Connect",
+      "contact": "reyasahamed.habibrahman@pearson.com"
+    },
+    "domain": "program",
+    "entity": "program",
+    "version": "v1",
+    "primaryKey": [
+      {
+        "goldColumn": "inventoryItemId",
+        "drivingColumn": "INVENTORY_ITEM_ID"
+      },
+      {
+        "goldColumn": "organizationId",
+        "drivingColumn": "ORGANIZATION_ID"
+      }
+    ],
+    "dataClassification": "internal",
+    "audience": "engineering",
+    "lifecycle": "active"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "inventoryItemId",
+    "organizationId",
+    "programId"
+  ],
+  "properties": {
+    "inventoryItemId": {
+      "type": "integer",
+      "description": "Oracle internal surrogate. Part of the natural key.",
+      "x-channels": []
+    },
+    "organizationId": {
+      "type": "integer",
+      "description": "Oracle internal surrogate. Part of the natural key.",
+      "x-channels": []
+    },
+    "programId": {
+      "type": "string",
+      "description": "Pearson Program Identifier",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "description": "Program Description (Internal)",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "longDescription": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Description (External)",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "relevanceValue": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Program Relevance Value",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "programFamilyCatalogCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Display Catalog",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "coverImageLargeUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Image URL (Large)",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "programOwnerName": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Program Owner",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "inventoryItemStatus": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Inventory item status code",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "parentProductId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Parent Product of the Program",
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "associatedProducts": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Associated Products",
+      "items": {
+        "type": "string"
+      },
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    },
+    "relatedPrograms": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Related Programs",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "relatedProgramId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-channels": [
+              "event",
+              "message",
+              "api"
+            ],
+            "description": "PPID of the related program"
+          },
+          "relationshipType": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-channels": [
+              "event",
+              "message",
+              "api"
+            ],
+            "description": "Type of the relationship between the programs"
+          }
+        }
+      },
+      "x-channels": [
+        "event",
+        "message",
+        "api"
+      ]
+    }
+  }
+}

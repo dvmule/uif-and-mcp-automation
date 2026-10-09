@@ -1,0 +1,75 @@
+domain: product
+version: v1
+
+# ── Semantic layer ──────────────────────────────────────────────────────────
+# source_system + canonical_lineage describe the PDH→canonical contract,
+# independent of which lake tier physically delivers the data. See ADR-13.
+
+source_system:
+  name: "Oracle EBS PDH"
+  modules: ["Inventory", "Item Catalog"]
+  contact: "ebs-platform@pearson.com"
+
+canonical_lineage:
+  inventory_item_id:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: INVENTORY_ITEM_ID
+    role:       pk
+
+  product_id:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: SEGMENT1
+
+  org_id:
+    pdh_table:  MTL_SYSTEM_ITEMS_B
+    pdh_column: ORGANIZATION_ID
+    role:       pk
+
+  isbn10:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR6
+    pdh_filter: "ATTR_GROUP_ID = 741"
+    pdh_grain:  item-level
+
+  isbn13:
+    pdh_table:  EGO_MTL_SY_ITEMS_EXT_B
+    pdh_column: C_EXT_ATTR8
+    pdh_filter: "ATTR_GROUP_ID = 741"
+    pdh_grain:  item-level
+
+# ── Physical layer ──────────────────────────────────────────────────────────
+# Where PDH data currently lives in our lake. Consumed by the Glue transform
+# and reconcile jobs.
+
+schema:
+  master: ../../../gold/product/v1/master.json
+
+sql:
+  file: sql/product.sql
+
+sources:
+  - alias: items
+    silver_table: uif_echo_dev_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+    is_source_of_truth: true        # used by reconcile for orphan detection
+    sot_pk_mapping:                 # gold PK col -> Spark SQL expression against this Silver table
+      inventory_item_id: "INVENTORY_ITEM_ID"
+      org_id:            "ORGANIZATION_ID"
+
+  - alias: items_ext
+    silver_table: uif_echo_dev_silver_mdm.ego_mtl_sy_items_ext_b
+    watermark_col: _silver_updated_at
+
+target:
+  database: eds_dev_gold_product
+  table: product
+  primary_key_cols:
+    - inventory_item_id
+    - org_id
+
+output_columns:
+  - inventory_item_id
+  - product_id
+  - org_id
+  - isbn10
+  - isbn13

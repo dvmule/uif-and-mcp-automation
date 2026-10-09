@@ -1,0 +1,260 @@
+name: Release a domain — cut the build tag
+
+# Cuts `<domain>/vX.Y.Z` so a domain can be deployed to UAT at a PINNED VERSION
+# rather than at whatever happens to be on develop (UIFPE-656).
+#
+# Reusable body; the trigger paths live in `<domain>-release.yml`, the same
+# split gold-schemas.yml uses. One body means the four domains cannot drift on
+# the parts that carry the safety properties.
+#
+# WHAT A DOMAIN TAG PINS, AND WHY IT DIFFERS FROM A STACK TAG. The stack tags
+# (echo/v*, apicurio/v*) carry an artefact manifest because promotion COPIES
+# pre-built bytes from one bucket to another, and rebuilding the same tag would
+# produce different hashes. A domain UAT deploy instead re-reads files from the
+# repository and syncs them to S3, so there are no pre-built artefacts to pin:
+# this tag pins a COMMIT, and `actions/checkout` on the tag is what makes the
+# deploy reproducible.
+#
+# THE GATE IS THE DOMAIN'S DEV DEPLOY, not a CI job. A tag is a claim that this
+# version works, and the strongest available evidence for a domain is that the
+# very same commit deployed to dev green -- its tests passed AND its artefacts
+# and config landed. So this refuses to tag a commit that has not done that,
+# and it checks the DEPLOY JOB's conclusion rather than the run's, because the
+# run also concludes success when the latch is off and the deploy was skipped.
+
+on:
+  workflow_call:
+    inputs:
+      domain:
+        description: "Domain folder under domains/"
+        required: true
+        type: string
+
+concurrency:
+  group: release-domain-${{ inputs.domain }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate the declared version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and tags: check-version.sh compares against every
+          # existing tag for this component, and a shallow clone has none.
+          fetch-depth: 0
+
+      # REUSED, not reimplemented. stacks/echo/scripts/check-version.sh and
+      # stacks/apicurio/scripts/check-version.sh are byte-identical and the
+      # script already takes the component from $COMPONENT, so a domain needs
+      # no third copy of "is this a releasable version number". It refuses a
+      # malformed number, one that already has a tag, and one that goes
+      # backwards.
+      - name: Check VERSION
+        id: check
+        env:
+          COMPONENT: ${{ inputs.domain }}
+        run: |
+          set -euo pipefail
+          tag="$(stacks/echo/scripts/check-version.sh "domains/${{ inputs.domain }}/VERSION")"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Releasing ${tag}"
+
+  gate:
+    name: Require a green dev deploy on this commit
+    needs: [validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.poll.outputs.run_id }}
+      conclusion: ${{ steps.poll.outputs.conclusion }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # WHICH COMMIT'S DEPLOY IS EVIDENCE ABOUT THIS ONE.
+      #
+      # deploy-<domain>-dev.yml is path-filtered on `domains/<domain>/**`, so a
+      # commit touching nothing under it produces NO run -- not a pending one,
+      # nothing. A VERSION bump lives under that path, so the ordinary case
+      # resolves to this commit; the walk matters only when a release is cut
+      # from a HEAD carrying a later unrelated commit.
+      #
+      # The equivalence is VERIFIED rather than assumed: if the two trees
+      # differ under the domain, this refuses instead of accepting evidence
+      # about different code.
+      - name: Resolve which commit carries the deploy evidence
+        id: evidence
+        env:
+          SHA: ${{ github.sha }}
+          DOMAIN: ${{ inputs.domain }}
+        run: |
+          set -euo pipefail
+          evidence="$(git rev-list --first-parent -n 1 "$SHA" -- "domains/${DOMAIN}/" || true)"
+          if [ -z "$evidence" ]; then
+            echo "::error::No ancestor of ${SHA} has ever touched domains/${DOMAIN}/, so there is no deploy evidence to find. This is not a releasable commit."
+            exit 1
+          fi
+          if [ "$evidence" != "$SHA" ]; then
+            if ! git diff --quiet "$evidence" "$SHA" -- "domains/${DOMAIN}/"; then
+              echo "::error::${SHA} differs from ${evidence} under domains/${DOMAIN}/, but only ${evidence} has a deploy run. The --first-parent walk that picked it is wrong for this history, and accepting its verdict would be evidence about different code. Refusing."
+              exit 1
+            fi
+            echo "::notice::${SHA} touches nothing under domains/${DOMAIN}/, so its evidence is ${evidence}. Verified identical under that path."
+          fi
+          echo "sha=${evidence}" >> "$GITHUB_OUTPUT"
+
+      # Polls rather than requiring a completed run up front: the dev deploy and
+      # this release fire on the SAME push, so the deploy is normally still
+      # running when we get here.
+      - name: Wait for the dev deploy to conclude
+        id: poll
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.evidence.outputs.sha }}
+          DOMAIN: ${{ inputs.domain }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          wf="deploy-${DOMAIN}-dev.yml"
+          deadline=$(( $(date +%s) + 35*60 ))
+          run_id=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            run_id="$(gh api "repos/${REPO}/actions/workflows/${wf}/runs?head_sha=${SHA}&per_page=1" \
+              --jq '.workflow_runs[0].id // empty' || true)"
+            if [ -n "$run_id" ]; then
+              status="$(gh api "repos/${REPO}/actions/runs/${run_id}" --jq '.status')"
+              [ "$status" = "completed" ] && break
+            fi
+            echo "waiting for ${wf} on ${SHA} (run=${run_id:-none} status=${status:-none})"
+            sleep 30
+          done
+          if [ -z "$run_id" ]; then
+            echo "::error::No ${wf} run exists for ${SHA} after 35 minutes. A domain is not releasable until its dev deploy has run on the same commit."
+            exit 1
+          fi
+
+          # THE DEPLOY JOB's conclusion, not the run's. When the latch is off,
+          # the deploy job is skipped and a 'latched' notice job runs instead --
+          # the RUN then concludes success while nothing was deployed. Tagging
+          # that would claim a version works in dev when it never reached it.
+          #
+          # Matched on the EXACT job name. Both of that workflow's jobs are
+          # named "Deploy <domain> ..." -- "Deploy <domain> latched off" and
+          # "Deploy <domain> to dev" -- and the latched one is declared first,
+          # so a prefix match plus .[0] reads the skipped notice job and refuses
+          # a perfectly good commit.
+          # gh's own --jq with env.WANT, not a pipe to jq and not the job name
+          # interpolated into the filter: no dependency on jq being installed,
+          # and no shell quoting inside a jq expression. Verified against the
+          # live API for all three cases -- the exact job, the latched job
+          # (which returns 'skipped', proving this is not a prefix match), and
+          # a name that does not exist (which returns 'missing').
+          export WANT="Deploy ${DOMAIN} to dev"
+          deploy_conclusion="$(gh api "repos/${REPO}/actions/runs/${run_id}/jobs" \
+            --jq '[.jobs[] | select(.name == env.WANT)] | .[0].conclusion // "missing"')"
+          if [ "$deploy_conclusion" = "missing" ]; then
+            echo "::error::${wf} run ${run_id} has no job named '${WANT}'. Either that workflow's job name changed — in which case change it here too — or the run did not reach the deploy job at all."
+            exit 1
+          fi
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+          echo "conclusion=${deploy_conclusion}" >> "$GITHUB_OUTPUT"
+          if [ "$deploy_conclusion" != "success" ]; then
+            echo "::error::${wf} run ${run_id} on ${SHA}: the deploy job concluded '${deploy_conclusion}', not success. If it was skipped, ${DOMAIN^^}_DEPLOY_ENABLED is off and nothing was deployed to dev — there is nothing to release."
+            exit 1
+          fi
+          echo "::notice::dev deploy ${run_id} succeeded on ${SHA}."
+
+  tag:
+    name: Cut the build tag
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Assemble the release manifest
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          DOMAIN: ${{ inputs.domain }}
+          GIT_COMMIT: ${{ github.sha }}
+          GATE_RUN_ID: ${{ needs.gate.outputs.run_id }}
+          GATE_CONCLUSION: ${{ needs.gate.outputs.conclusion }}
+        run: |
+          set -euo pipefail
+          # Hand-assembled rather than via release-manifest.sh: that script
+          # renders the stacks' artefact block, and a domain tag has no
+          # artefacts to render (see the header). What a domain tag records is
+          # the commit and the evidence that it deployed to dev.
+          {
+            echo "${TAG}:"
+            echo "  domain: \"${DOMAIN}\""
+            echo "  git_commit: \"${GIT_COMMIT}\""
+            echo "  built_at: \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+            echo "  gate:"
+            echo "    check: deploy-${DOMAIN}-dev.yml"
+            echo "    run_id: ${GATE_RUN_ID}"
+            echo "    conclusion: ${GATE_CONCLUSION}"
+            echo "  deploys:"
+            echo "    note: >-"
+            echo "      This tag pins a commit, not artefacts. deploy-${DOMAIN}-uat.yml"
+            echo "      checks out this tag and syncs the schema and mapping files and"
+            echo "      the pipeline config from it, so the UAT deploy is reproducible"
+            echo "      from the tag alone."
+          } > /tmp/manifest.yaml
+          cat /tmp/manifest.yaml
+
+      - name: Create and push the annotated tag
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Annotated, with the manifest as the message, so the tag and its
+          # evidence are one object -- readable offline with `git show <tag>`
+          # and impossible to separate.
+          git tag -a "$TAG" -F /tmp/manifest.yaml
+          git push origin "refs/tags/${TAG}"
+          echo "::notice::Tagged ${TAG}"
+
+      - name: Mirror it to a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # gh, not a third-party release action: only actions, github,
+          # hashicorp, aws-actions, aquasecurity, sonarsource, opentofu and
+          # pearson* pass the enterprise allow-list, and one disallowed uses:
+          # fails the whole workflow at startup with no job logs.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/manifest.yaml \
+            --target "${GITHUB_SHA}"
+          echo "::notice::Release ${TAG} published."
+
+      # A tag pushed by a workflow using the default GITHUB_TOKEN does NOT fire
+      # tag-triggered workflows, so nothing deploys off the back of this. The
+      # UAT deploy is a separate, deliberate dispatch on the tag.
+      - name: What to do with this tag
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          DOMAIN: ${{ inputs.domain }}
+        run: |
+          echo "::notice::To deploy ${TAG} to uat: set ${DOMAIN^^}_UAT_DEPLOY_ENABLED=true, then 'gh workflow run deploy-${DOMAIN}-uat.yml --ref ${TAG}', then have a reviewer approve the uat environment gate. Nothing deploys automatically from this tag."

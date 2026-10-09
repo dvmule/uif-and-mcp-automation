@@ -1,0 +1,71 @@
+direction: down
+
+title: "ILLUSTRATED - none of this has run.\nDashed outline means it does not exist yet." {
+  shape: rectangle
+  style: { fill: "#ffffff"; stroke: "#c62828"; stroke-width: 3; font-size: 17 }
+}
+
+tag: "BUILD TAG   apicurio/v0.2.3\nTHE SAME TAG uat ran. No prod build,\nno rebuild, no second artifact.\nbff sha256:0ec3b9f2..." {
+  shape: rectangle
+  style: { fill: "#ede7f6"; stroke: "#4527a0"; stroke-width: 4; font-size: 16 }
+}
+
+uatdone: "release/uat/2026-09-21.1\nalready promoted - this is the\nevidence prod would promote on" {
+  shape: rectangle
+  style: { fill: "#e0f2f1"; stroke: "#00695c"; stroke-width: 2; font-size: 15 }
+}
+
+boot: "bootstrap-environment.sh prod\nBY HAND, ONCE. Nothing in CI calls it.\n7 steps: deploy role, env-scoped deploy policy,\nbase policy, backend policy, verify,\nGitHub Environment, CI secret" {
+  shape: rectangle
+  style: { fill: "#ffffff"; stroke: "#6a1b9a"; stroke-width: 3; stroke-dash: 5; font-size: 15 }
+}
+
+env: "prod GitHub Environment\nDOES NOT EXIST TODAY.\nneeds a required reviewer and\na tag policy of apicurio/v*" {
+  shape: hexagon
+  style: { fill: "#fce4ec"; stroke: "#c62828"; stroke-width: 4; font-size: 15 }
+}
+
+infra1: "first infra run\nAPICURIO_PROD_INFRA = bootstrap\ncreates the prod ECR repo,\nthen applies everything" {
+  shape: rectangle
+  style: { fill: "#ffffff"; stroke: "#6a1b9a"; stroke-width: 2; stroke-dash: 5; font-size: 15 }
+}
+
+infra2: "every later infra run\nAPICURIO_PROD_INFRA = apply\nsame root module,\nenvs/prod.tfvars" {
+  shape: rectangle
+  style: { fill: "#ffffff"; stroke: "#6a1b9a"; stroke-width: 2; stroke-dash: 5; font-size: 15 }
+}
+
+promo: "promote\nAPICURIO_PROD_PROMOTE = run\ncopy the same bytes into the\nprod account, app-only apply, smoke" {
+  shape: rectangle
+  style: { fill: "#ffffff"; stroke: "#6a1b9a"; stroke-width: 2; stroke-dash: 5; font-size: 15 }
+}
+
+rel: "RELEASE TAG\nrelease/prod/DATE.1" {
+  shape: rectangle
+  style: { fill: "#ffffff"; stroke: "#00695c"; stroke-width: 3; stroke-dash: 5; font-size: 16 }
+}
+
+blk1: "BLOCKER  UIFPE-492\nprod is a DIFFERENT AWS account.\nuat promoted inside one account, so\ncross-account reads were never exercised.\nThe promote fails reading dev's ECR repo\nand artifact bucket until the SOURCE side\ngrants resource policies." {
+  shape: rectangle
+  style: { fill: "#fce4ec"; stroke: "#c62828"; stroke-width: 3; font-size: 15 }
+}
+
+blk2: "EXPECT THIS  UIFPE-500\nthe first deployment of any environment\nfails by construction: infra pins a digest\nthe promote has not delivered, the apply\nreports success anyway, and the ECS circuit\nbreaker stops retrying. Recover with\naws ecs update-service --force-new-deployment" {
+  shape: rectangle
+  style: { fill: "#fce4ec"; stroke: "#c62828"; stroke-width: 3; font-size: 15 }
+}
+
+blk3: "ALSO UNDEFINED\nRTO and RPO have no targets.\nThe module is already env-aware:\nprod gets deletion protection, a final\nsnapshot and 7-day backups." {
+  shape: rectangle
+  style: { fill: "#fce4ec"; stroke: "#c62828"; stroke-width: 2; font-size: 15 } }
+
+uatdone -> tag: "the same artifact,\npromoted onward" { style: { stroke: "#00695c"; stroke-dash: 3; font-size: 14 } }
+boot -> env: "step 6/7 creates it" { style: { stroke: "#6a1b9a"; stroke-dash: 5; font-size: 14 } }
+tag -> env: "a tag push" { style: { stroke: "#4527a0"; stroke-width: 2; font-size: 14 } }
+env -> infra1: "approval" { style: { stroke: "#c62828"; stroke-dash: 5; font-size: 14 } }
+infra1 -> infra2: { style: { stroke: "#6a1b9a"; stroke-dash: 5 } }
+infra2 -> promo: { style: { stroke: "#6a1b9a"; stroke-dash: 5 } }
+promo -> rel: "only a green smoke" { style: { stroke: "#00695c"; stroke-dash: 5; font-size: 14 } }
+blk1 -> promo: "blocks" { style: { stroke: "#c62828"; stroke-width: 3; font-size: 14 } }
+blk2 -> infra1: "hits here" { style: { stroke: "#c62828"; stroke-width: 3; font-size: 14 } }
+blk3 -> rel: "not a blocker,\nbut unanswered" { style: { stroke: "#c62828"; stroke-dash: 3; font-size: 14 } }

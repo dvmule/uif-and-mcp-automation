@@ -1,0 +1,9 @@
+# PLACEHOLDER — prod is not provisioned yet.
+# Update bucket (and account) when the prod AWS environment exists, then
+# remove this banner. The deploy workflow is latched off until then anyway
+# (DEPLOY_ENABLED repo variable).
+bucket       = "UPDATE-ME-prod-tfstate-bucket"
+key          = "echo-gold/prod/terraform.tfstate"
+region       = "eu-west-1"
+use_lockfile = true
+encrypt      = true

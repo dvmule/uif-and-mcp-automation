@@ -1,0 +1,129 @@
+name: MCP (shared Bridge)
+
+# The ONE generic entry point for every MCP domain (capabilities/mcp/mcp-bridge.md).
+# A domain is DISCOVERED by convention - it is ONBOARDED by domains/<domain>/src/mcp/bridge-config.yaml
+# (which names its MCP contract, `contract: src/api/<api>/openapi.yaml`, when the domain ships several) -
+# never registered: no per-domain workflow, no hardcoded domain list, no per-domain
+# latch variable. Product, Price and any future domain run through this file.
+#
+#   detect   -> which discovered domains this change touches (affected_domains.py):
+#               a domain-owned change (anything under its src/api/**, src/schemas/** - the contract
+#               or a $ref-erenced schema file - or src/mcp/**) selects that domain;
+#               a shared-tooling / pipeline change selects every discovered domain;
+#               workflow_dispatch selects `domains` (comma list) or every domain ("all").
+#               Every folder under domains/ carries src/mcp/bridge-config.yaml (onboarding file):
+#               ready -> processed; no contract yet / mcp_enabled: false -> SKIPPED visibly (job
+#               summary + outputs); ambiguous or missing explicit contract -> FAILS here, clearly.
+#   <domain> -> ONE matrix entry per selected domain, named after it, calling the
+#               unchanged reusable pipeline mcp-deploy.yml. The matrix runs
+#               SERIALLY (max-parallel: 1): a domain is reconciled completely -
+#               release, REST publish, shared MCP asset, Bridge ADD/UPDATE/NO-OP,
+#               read-back - before the next one starts, and every domain re-reads the
+#               live shared state before it writes. fail-fast: the first failing
+#               domain fails the run and the remaining entries are CANCELLED (visible),
+#               never skipped silently. Parallel writes to the shared MCP asset or the
+#               shared Bridge cannot happen inside one run; across runs the bridge job's
+#               concurrency group (mcp-deploy.yml) still serializes them.
+#
+#   LIFECYCLE: a developer works on any branch (feature/*, bugfix/*, hotfix/*, ...) and
+#   opens a PR; NOTHING here runs for those pushes or for the PR. When the PR is merged
+#   into develop, the merge is a push on develop -> this workflow runs ONCE, discovers
+#   the domains that merge touched (diff of the push: github.event.before..github.sha)
+#   and reconciles them serially, live, behind the reusable workflow's gates (shared
+#   MCP_DEPLOY_ENABLED repository-variable latch - OFF skips the live/bridge jobs and the run
+#   stays green with zero Anypoint calls - 'dev' Environment secrets, resolved upstream_url,
+#   MCP_LIVE_ENABLED only in the live jobs).
+#   - push to develop:   LIVE DEV reconciliation of the affected domains.
+#   - workflow_dispatch: manual run - domains=all|a,b; dry_run=true (default) previews,
+#                        dry_run=false goes live. Available from any branch/ref.
+#   No pull_request trigger by design: this workflow deploys; contract validation on PRs
+#   belongs to the domains' CI.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      # the CONTRACT is the root openapi.yaml PLUS its local $ref dependencies (src/schemas/...);
+      # any src/api or src/schemas change wakes the domain - release_version.py decides whether the
+      # reachable contract actually changed (bundled comparison), so an unrelated file ends as NO-OP.
+      - "domains/*/src/api/**"
+      - "domains/*/src/schemas/**"
+      - "domains/*/src/mcp/**"
+      - "delivery-lab/reference-implementations/mcp-bridge/**"
+      - ".github/workflows/mcp-deploy.yml"
+      - ".github/workflows/mcp.yml"
+  workflow_dispatch:
+    inputs:
+      domains:
+        description: "Domains to reconcile: comma-separated (e.g. product,price) or 'all' (every onboarded domain: domains/<d>/src/mcp/bridge-config.yaml)."
+        required: false
+        type: string
+        default: all
+      dry_run:
+        description: "true (default): preview only. false: LIVE DEV reconciliation (all gates still apply)."
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  TOOLING_DIR: delivery-lab/reference-implementations/mcp-bridge
+
+jobs:
+  detect:
+    name: Discover affected domains
+    runs-on: ubuntu-latest
+    outputs:
+      domains: ${{ steps.affected.outputs.domains }}                 # PROCESSED domains only (the matrix)
+      count: ${{ steps.affected.outputs.count }}
+      skipped_no_contract: ${{ steps.affected.outputs.skipped_no_contract }}  # onboarded, no OpenAPI contract yet
+      skipped_disabled: ${{ steps.affected.outputs.skipped_disabled }}        # onboarded, mcp_enabled: false
+      missing_config: ${{ steps.affected.outputs.missing_config }}            # folders without bridge-config.yaml (never processed)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the previous develop tip must be present for the diff
+      - name: Affected domains (read-only, convention-driven)
+        id: affected
+        env:
+          EVENT: ${{ github.event_name }}
+          ONLY: ${{ inputs.domains }}
+          BASE: ${{ github.event.before }}   # push on develop: the develop tip BEFORE the merge landed
+          HEAD_SHA: ${{ github.sha }}         # the merge commit (or the squash/rebase commit)
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ -z "$ONLY" ] || [ "$ONLY" = "all" ]; then
+              python "$TOOLING_DIR"/scripts/affected_domains.py --all
+            else
+              python "$TOOLING_DIR"/scripts/affected_domains.py --only "$ONLY"
+            fi
+          elif [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BASE" 2>/dev/null; then
+            # everything the merged work changed on develop = exactly the files between the previous tip and this push
+            git diff --name-only "$BASE" "$HEAD_SHA" > changed.txt
+            python "$TOOLING_DIR"/scripts/affected_domains.py --changed-files changed.txt
+          else
+            # no usable previous tip (branch created / history rewritten): reconcile every discovered domain
+            # (an unchanged domain ends as NO-OP - release comparison + live route comparison)
+            python "$TOOLING_DIR"/scripts/affected_domains.py --all
+          fi
+
+  domain:
+    name: ${{ matrix.domain }}
+    needs: detect
+    if: ${{ needs.detect.outputs.count != '0' }}
+    strategy:
+      fail-fast: true   # a failing domain fails the run; the remaining entries are cancelled, never silently skipped
+      max-parallel: 1   # SERIAL: one domain reconciled completely (incl. read-back) before the next starts
+      matrix:
+        domain: ${{ fromJson(needs.detect.outputs.domains) }}
+    uses: ./.github/workflows/mcp-deploy.yml
+    secrets: inherit
+    with:
+      domain: ${{ matrix.domain }}
+      environment: dev
+      # a push on develop reconciles live (subject to the live jobs' gates);
+      # a manual dispatch follows its dry_run input (default true).
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

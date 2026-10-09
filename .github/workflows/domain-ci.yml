@@ -1,0 +1,185 @@
+name: Domain CI
+
+# Monorepo CI. GitHub only auto-runs workflows under this repo-root .github/workflows/,
+# so a domain carries NO per-domain CI folder — all triggering is wired here. Each domain
+# is an independent job that runs only when files under its path change. Domain detection
+# is a plain `git diff` over changed paths (no third-party action) so it never depends on
+# the repo's Actions allow-list. CD is the same reusable-workflow shape: domain-cd.yml.
+#
+# Add a domain: create domains/<name>/ (via ../../create-domain.sh) — detection picks it
+# up automatically from the folder name, no workflow edit required.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'domains/**'
+  pull_request:
+    paths:
+      - 'domains/**'
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect touched domains
+    runs-on: ubuntu-latest
+    outputs:
+      domains: ${{ steps.filter.outputs.domains }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect touched domains
+        id: filter
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          HEAD_SHA="${{ github.sha }}"
+
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            BASE_SHA=$(git rev-parse "$HEAD_SHA~1" 2>/dev/null || echo "$HEAD_SHA")
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          DOMAINS_RAW=$(echo "$CHANGED" | grep '^domains/' | cut -d/ -f2 | sort -u || true)
+
+          # Temporary guard: a domain renamed/removed in this diff (e.g. a
+          # PR spanning a base far enough behind that a domain like `income`
+          # existed there but was replaced by the time of HEAD) still shows
+          # up as "touched" by the path grep above, and the ci job below
+          # would then `cd` into a directory that no longer exists and fail
+          # with a misleading error. Skip anything without a real directory
+          # at HEAD instead of scheduling a job for it. Revisit if
+          # domain-ci.yml is ever reworked to distinguish added/modified
+          # domains from removed ones explicitly.
+          if [ -n "$DOMAINS_RAW" ]; then
+            DOMAINS_RAW=$(echo "$DOMAINS_RAW" | while read -r d; do [ -d "domains/$d" ] && echo "$d"; done)
+          fi
+
+          if [ -z "$DOMAINS_RAW" ]; then
+            DOMAINS_JSON="[]"
+          else
+            DOMAINS_JSON=$(echo "$DOMAINS_RAW" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          fi
+
+          echo "domains=$DOMAINS_JSON" >> "$GITHUB_OUTPUT"
+          echo "Touched domains: $DOMAINS_JSON"
+
+  ci:
+    needs: detect
+    if: needs.detect.outputs.domains != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        domain: ${{ fromJSON(needs.detect.outputs.domains) }}
+    name: ci (${{ matrix.domain }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record run start (for pipeline health metric below)
+        run: echo "CI_START_TIME=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Definition-of-done gate
+        working-directory: domains/${{ matrix.domain }}
+        run: |
+          set -euo pipefail
+          # Enforce the starred (CI-enforced) items from DOMAIN-CHECKLIST.md:
+          # schema registered before implementation, tests present, and the
+          # one-container build contract exists. These are structural gates;
+          # language-specific build/test steps are added per domain as it ships.
+          test -f DOMAIN-CHECKLIST.md || { echo "missing DOMAIN-CHECKLIST.md"; exit 1; }
+          test -d src/schemas || { echo "missing src/schemas/ (Schema Registry First)"; exit 1; }
+          test -f src/Dockerfile || { echo "missing src/Dockerfile (one image = the build contract)"; exit 1; }
+          test -d qe || { echo "missing qe/ (tests + quality strategy required)"; exit 1; }
+          echo "structural gate passed for ${{ matrix.domain }}"
+
+      # Non-negotiable Pearson identity/secrets gate — only fires once a domain
+      # actually ships an openapi.yaml or Helm templates; scaffold-only domains
+      # stay green. See capabilities/infrastructure/kubernetes.md "Identity & secrets".
+      - name: Entra ID + Keeper gate
+        working-directory: domains/${{ matrix.domain }}
+        run: |
+          set -euo pipefail
+          # A domain's contracts are per ENTITY (ADR-0022 decision 4), so
+          # one src/api/openapi.yaml no longer exists for a domain.
+          if ls src/api/*/openapi.yaml >/dev/null 2>&1; then
+            # Entra ID check disabled (PR #21, entraid_remove). The `:` no-op
+            # keeps the then-block non-empty — an if-body that is only
+            # comments is a bash SYNTAX error, which broke CI for any domain
+            # shipping an openapi.yaml (comments are stripped by the parser
+            # after commenting out the grep left the block empty).
+            #grep -q "login.microsoftonline.com" src/api/openapi.yaml \
+            #  || { echo "FAIL: src/api/openapi.yaml must declare Entra ID as the OIDC identity provider"; exit 1; }
+            :
+          fi
+          if [ -d infrastructure/helm/templates ] && ls infrastructure/helm/templates/*.yaml >/dev/null 2>&1; then
+            if grep -rlq "kind: ExternalSecret" infrastructure/helm/templates/; then
+              grep -rq "keeper-secrets-manager" infrastructure/helm/templates/ \
+                || { echo "FAIL: ExternalSecret must reference the Keeper ClusterSecretStore (keeper-secrets-manager)"; exit 1; }
+              ! grep -rqE "aws-secrets-manager|hashicorp-vault|azure-keyvault" infrastructure/helm/templates/ \
+                || { echo "FAIL: only Keeper is the permitted secret store"; exit 1; }
+            fi
+          fi
+          echo "identity/secrets gate passed for ${{ matrix.domain }}"
+
+      # Placeholder for the domain's real build/test/scan. The single contract is
+      # `docker build src/` producing one image; a domain wires its concrete steps
+      # here once it ships code. Kept as a no-op so CI is green on scaffold-only domains.
+      - name: Build / test / scan
+        working-directory: domains/${{ matrix.domain }}
+        run: echo "no build steps yet for ${{ matrix.domain }} — add when code lands"
+
+      # Pipeline self-observability (capabilities/observability/guidelines.md
+      # "Pipeline health metrics"): emits one CloudWatch EMF log event per
+      # domain per run so PipelineRun/PipelineDurationSeconds are queryable
+      # metrics, not just pass/fail text buried in a GitHub Actions log.
+      # Inert (no-op, never fails the build) until UIF_CI_TELEMETRY_ROLE_ARN
+      # is configured as a repository variable and the log group/OIDC role
+      # below are provisioned via Terraform — same "scaffold-safe until wired"
+      # posture as the Entra ID + Keeper gate above.
+      - name: Configure AWS credentials (CI telemetry)
+        if: always() && vars.UIF_CI_TELEMETRY_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.UIF_CI_TELEMETRY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Emit CI health metric (CloudWatch EMF)
+        if: always() && vars.UIF_CI_TELEMETRY_ROLE_ARN != ''
+        run: |
+          set -euo pipefail
+          DURATION=$(( $(date +%s) - CI_START_TIME ))
+          EMF=$(jq -n \
+            --arg domain "${{ matrix.domain }}" \
+            --arg status "${{ job.status }}" \
+            --argjson duration "$DURATION" \
+            --argjson ts "$(date +%s%3N)" \
+            '{
+              "_aws": {
+                "Timestamp": $ts,
+                "CloudWatchMetrics": [{
+                  "Namespace": "UIF/CI",
+                  "Dimensions": [["Domain", "Status"]],
+                  "Metrics": [
+                    {"Name": "PipelineRun", "Unit": "Count"},
+                    {"Name": "PipelineDurationSeconds", "Unit": "Seconds"}
+                  ]
+                }]
+              },
+              "Domain": $domain,
+              "Status": $status,
+              "PipelineRun": 1,
+              "PipelineDurationSeconds": $duration
+            }')
+          aws logs put-log-events \
+            --log-group-name /uif/ci/pipeline-health \
+            --log-stream-name "${{ matrix.domain }}" \
+            --log-events "[{\"timestamp\": $(date +%s%3N), \"message\": $(jq -Rs . <<< "$EMF")}]"

@@ -1,0 +1,18 @@
+# Gold pipeline: program — dev overlay (deep-merged over pipelines/base/program.yaml).
+# Only per-environment values belong here.
+#
+# dev is the ONLY overlay that exists for program, matching product: uat/prod
+# are blocked on real Terraform backends (both backends/*.s3.tfbackend are still
+# UPDATE-ME- placeholders) and the ADR-0004 §CP-5 cutover for those envs.
+
+enabled: true
+
+schema:
+  master_s3_path: s3://uif-echo-dev-gold-artifacts/schemas/gold/program/v1/master.json
+
+mapping:
+  manifest_s3_path: s3://uif-echo-dev-gold-artifacts/mappings/program/v1/manifest.yaml
+  sql_s3_path: s3://uif-echo-dev-gold-artifacts/mappings/program/v1/sql/program.sql
+
+target:
+  s3_path: s3://uif-echo-dev-gold/program/

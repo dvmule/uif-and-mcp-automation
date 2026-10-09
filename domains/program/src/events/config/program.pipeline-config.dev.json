@@ -1,0 +1,234 @@
+{
+  "pipelineid": {
+    "S": "event-dev-program"
+  },
+  "domain": {
+    "S": "program"
+  },
+  "version": {
+    "S": "latest"
+  },
+  "enabled": {
+    "BOOL": true
+  },
+  "processor": {
+    "M": {
+      "glue_job_name": {
+        "S": "uif-event-dev-publish"
+      },
+      "mode_default": {
+        "S": "INCREMENTAL"
+      },
+      "arguments": {
+        "M": {
+          "schema_name": {
+            "S": "program"
+          },
+          "glue_database": {
+            "S": "uif_echo_dev_gold_program"
+          },
+          "glue_table": {
+            "S": "program"
+          },
+          "event_bus_name": {
+            "S": "uif-event-dev-program"
+          },
+          "mapping_key": {
+            "S": "event-pipeline/domains/program/program.mapping.json"
+          },
+          "event_schema_key": {
+            "S": "event-pipeline/domains/program/program-{operation}-data.json"
+          },
+          "join_key": {
+            "S": "inventory_item_id,organization_id"
+          },
+          "business_key_columns": {
+            "S": "program_id,programId"
+          },
+          "routing_attribute": {
+            "S": "programId"
+          },
+          "event_type": {
+            "S": "com.pearson.program.program.{operation}.v1"
+          },
+          "event_source": {
+            "S": "urn:pearson:svc:program-change-pipeline"
+          },
+          "event_dataschema": {
+            "S": "https://schemas.pearson.com/program/program-{operation}-data/v1"
+          },
+          "data_classification": {
+            "S": "internal"
+          },
+          "pii_present": {
+            "S": "false"
+          }
+        }
+      }
+    }
+  },
+  "glue": {
+    "M": {
+      "database": {
+        "S": "uif_echo_dev_gold_program"
+      },
+      "max_retries": {
+        "N": "0"
+      },
+      "sizing_tiers": {
+        "L": [
+          {
+            "M": {
+              "name": {
+                "S": "small"
+              },
+              "max_rows": {
+                "N": "100000"
+              },
+              "max_capacity": {
+                "N": "0.0625"
+              },
+              "worker_type": {
+                "S": "G.1X"
+              },
+              "num_workers": {
+                "N": "2"
+              },
+              "timeout_minutes": {
+                "N": "120"
+              }
+            }
+          },
+          {
+            "M": {
+              "name": {
+                "S": "medium"
+              },
+              "max_rows": {
+                "N": "500000"
+              },
+              "max_capacity": {
+                "N": "1"
+              },
+              "worker_type": {
+                "S": "G.2X"
+              },
+              "num_workers": {
+                "N": "4"
+              },
+              "timeout_minutes": {
+                "N": "240"
+              }
+            }
+          },
+          {
+            "M": {
+              "name": {
+                "S": "large"
+              },
+              "max_rows": {
+                "NULL": true
+              },
+              "max_capacity": {
+                "N": "1"
+              },
+              "worker_type": {
+                "S": "G.4X"
+              },
+              "num_workers": {
+                "N": "6"
+              },
+              "timeout_minutes": {
+                "N": "600"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "eventing": {
+    "M": {
+      "event_bus_name": {
+        "S": "uif-event-dev-program"
+      },
+      "source": {
+        "S": "urn:pearson:svc:program-change-pipeline"
+      },
+      "athena_output": {
+        "S": "s3://uif-echo-dev-gold-artifacts/event-pipeline/athena-results/"
+      },
+      "detail_type_pattern": {
+        "S": "program.{operation}.{version}"
+      },
+      "operation_suffix_by_op": {
+        "M": {
+          "INSERT": {
+            "S": "created"
+          },
+          "UPDATE": {
+            "S": "updated"
+          },
+          "DELETE": {
+            "S": "deleted"
+          }
+        }
+      },
+      "apicurio_artifact_pattern": {
+        "S": "program.program.{operation}"
+      },
+      "emit_all_active_tiers": {
+        "BOOL": true
+      }
+    }
+  },
+  "delta": {
+    "M": {
+      "table": {
+        "S": "PROGRAM_CHANGES"
+      },
+      "run_id_col": {
+        "S": "run_id"
+      },
+      "op_col": {
+        "S": "OP"
+      }
+    }
+  },
+  "publish_ops": {
+    "L": [
+      {
+        "S": "INSERT"
+      },
+      {
+        "S": "UPDATE"
+      },
+      {
+        "S": "DELETE"
+      }
+    ]
+  },
+  "skip_run_when": {
+    "M": {
+      "total_zero": {
+        "BOOL": true
+      },
+      "no_publishable_ops": {
+        "BOOL": true
+      }
+    }
+  },
+  "batch": {
+    "M": {
+      "putevents_batch_size": {
+        "N": "10"
+      },
+      "delta_chunk_size": {
+        "N": "5000"
+      },
+      "apicurio_fetch_once_per_run": {
+        "BOOL": true
+      }
+    }
+  }
+}

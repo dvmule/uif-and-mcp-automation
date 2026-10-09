@@ -1,0 +1,32 @@
+name: Gold Schemas (stock) — Validate
+
+# Trigger paths only. The body is in gold-schemas.yml.
+#
+# Before this file, stock's gold master was validated ONLY by
+# deploy-stock-dev.yml, which runs on push to develop - so a malformed master
+# merged and the deploy was what failed, after the fact. Stock does not publish:
+# a service URN does not exist for it yet.
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "domains/stock/src/schemas/**"
+      - "domains/stock/src/apps/pipelines/**"
+      - "stacks/echo/src/apps/cli/**"
+      - ".github/workflows/gold-schemas.yml"
+      - ".github/workflows/stock-gold-schemas.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "domains/stock/src/schemas/**"
+      - "domains/stock/src/apps/pipelines/**"
+      - "stacks/echo/src/apps/cli/**"
+      - ".github/workflows/gold-schemas.yml"
+      - ".github/workflows/stock-gold-schemas.yml"
+
+jobs:
+  gold-schemas:
+    uses: ./.github/workflows/gold-schemas.yml
+    with:
+      domain: stock

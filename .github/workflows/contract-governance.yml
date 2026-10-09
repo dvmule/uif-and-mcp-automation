@@ -1,0 +1,192 @@
+name: Contract Governance
+
+# The Apicurio guardrail lifecycle (stacks/apicurio/standards/apicurio-governance.md
+# §4): lint -> compatibility dry-run -> (on merge to main) register + dual-sync
+# to AWS Glue Schema Registry. Detection is a plain `git diff` over changed
+# paths, matching domain-ci.yml's own convention — no third-party action, so
+# this never depends on the repo's Actions allow-list.
+#
+# Every registry-touching step is scaffold-safe: APICURIO_REGISTRY_URL is not
+# provisioned in this repo yet, so compatibility-check/register/sync no-op
+# green (not skipped-red) until that repo variable is set — same posture as
+# domain-ci.yml's CI-telemetry step (vars.UIF_CI_TELEMETRY_ROLE_ARN).
+
+on:
+  pull_request:
+    paths:
+      - 'domains/*/src/api/**'
+      - 'domains/*/src/events/**'
+      - 'domains/*/src/schemas/**'
+      - 'domains/*/src/mcp/**'
+      - 'domains/*/src/agents/**'
+  push:
+    branches: [main]
+    paths:
+      - 'domains/*/src/api/**'
+      - 'domains/*/src/events/**'
+      - 'domains/*/src/schemas/**'
+      - 'domains/*/src/mcp/**'
+      - 'domains/*/src/agents/**'
+
+permissions:
+  contents: read
+
+env:
+  TOOLING_DIR: delivery-lab/reference-implementations/schema-governance
+
+jobs:
+  detect:
+    name: Detect touched contracts
+    runs-on: ubuntu-latest
+    outputs:
+      contracts: ${{ steps.detect.outputs.contracts }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ env.TOOLING_DIR }}/requirements.txt
+
+      - run: pip install -r ${{ env.TOOLING_DIR }}/requirements.txt
+
+      - name: Detect changed contracts
+        id: detect
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+          fi
+          HEAD_SHA="${{ github.sha }}"
+          if [ -z "$BASE_SHA" ] || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            BASE_SHA=$(git rev-parse "$HEAD_SHA~1" 2>/dev/null || echo "$HEAD_SHA")
+          fi
+
+          CONTRACTS=$(python "$TOOLING_DIR/scripts/detect_changed_contracts.py" --base "$BASE_SHA" --head "$HEAD_SHA")
+          echo "contracts=$CONTRACTS" >> "$GITHUB_OUTPUT"
+          echo "Changed contracts: $CONTRACTS"
+
+  lint:
+    needs: detect
+    if: needs.detect.outputs.contracts != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        contract: ${{ fromJSON(needs.detect.outputs.contracts) }}
+    name: lint (${{ matrix.contract.domain }}/${{ matrix.contract.capability }})
+    steps:
+      - uses: actions/checkout@v4
+
+      # Non-blocking until a real host serves the canonical-schema/envelope
+      # coordinates (schemas.pearson.com is not resolvable yet — see
+      # delivery-lab/reference-implementations/schema-governance/README.md
+      # "A note on invalid-ref lint errors"). Spectral's built-in ref
+      # resolver treats an unreachable $ref as a hard lint error, which
+      # would fail this check on every PR touching a contract that
+      # references the shared envelope/canonical schemas, for a reason
+      # that has nothing to do with whether the PR's own change is correct.
+      # Flip this back to a hard failure once that host is live.
+      - name: Spectral lint
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          case "${{ matrix.contract.capability }}" in
+            api)    RULESET="$TOOLING_DIR/spectral/openapi.spectral.yaml" ;;
+            events) RULESET="$TOOLING_DIR/spectral/asyncapi.spectral.yaml" ;;
+            mcp)    RULESET="$TOOLING_DIR/spectral/mcp.spectral.yaml" ;;
+            *)      echo "no ruleset for capability '${{ matrix.contract.capability }}' (schemas/agents payloads are linted as part of their owning api/events/mcp contract) — skipping"; exit 0 ;;
+          esac
+          npx --yes @stoplight/spectral-cli@6 lint -r "$RULESET" "${{ matrix.contract.path }}"
+
+  compatibility-check:
+    needs: detect
+    if: needs.detect.outputs.contracts != '[]' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        contract: ${{ fromJSON(needs.detect.outputs.contracts) }}
+    name: compatibility-check (${{ matrix.contract.domain }}/${{ matrix.contract.capability }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ env.TOOLING_DIR }}/requirements.txt
+
+      - run: pip install -r ${{ env.TOOLING_DIR }}/requirements.txt
+
+      - name: Compatibility dry-run against live Apicurio
+        if: vars.APICURIO_REGISTRY_URL != ''
+        env:
+          APICURIO_REGISTRY_URL: ${{ vars.APICURIO_REGISTRY_URL }}
+        run: |
+          set -euo pipefail
+          cd "$TOOLING_DIR/scripts"
+          python check_apicurio_compatibility.py "$GITHUB_WORKSPACE/${{ matrix.contract.path }}"
+
+      - name: Registry not configured yet
+        if: vars.APICURIO_REGISTRY_URL == ''
+        run: |
+          echo "SKIP: APICURIO_REGISTRY_URL is not set — compatibility gate is a no-op until the registry is provisioned."
+
+  register-and-sync:
+    needs: [detect, lint]
+    if: >-
+      needs.detect.outputs.contracts != '[]' &&
+      github.event_name == 'push' &&
+      vars.APICURIO_REGISTRY_URL != '' &&
+      vars.SCHEMA_GOVERNANCE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        contract: ${{ fromJSON(needs.detect.outputs.contracts) }}
+    name: register-and-sync (${{ matrix.contract.domain }}/${{ matrix.contract.capability }})
+    permissions:
+      id-token: write
+      contents: read
+    environment: main
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ env.TOOLING_DIR }}/requirements.txt
+
+      - run: pip install -r ${{ env.TOOLING_DIR }}/requirements.txt
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_SCHEMA_GOVERNANCE }}
+          aws-region: us-east-1
+
+      - name: Register in Apicurio
+        env:
+          APICURIO_REGISTRY_URL: ${{ vars.APICURIO_REGISTRY_URL }}
+        run: |
+          set -euo pipefail
+          cd "$TOOLING_DIR/scripts"
+          python register_to_apicurio.py "$GITHUB_WORKSPACE/${{ matrix.contract.path }}"
+
+      - name: Dual-Sync Bridge -> AWS Glue Schema Registry
+        if: matrix.contract.artifact_group != '' && matrix.contract.artifact_id != ''
+        env:
+          APICURIO_REGISTRY_URL: ${{ vars.APICURIO_REGISTRY_URL }}
+          GLUE_REGISTRY_NAME: ${{ vars.GLUE_REGISTRY_NAME }}
+        run: |
+          set -euo pipefail
+          cd "$TOOLING_DIR/scripts"
+          python sync_to_glue_schema_registry.py \
+            --group "${{ matrix.contract.artifact_group }}" \
+            --artifact "${{ matrix.contract.artifact_id }}"

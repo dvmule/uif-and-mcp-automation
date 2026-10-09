@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Refuses a push containing commits that break either rule.
+#
+# The backstop for the two commit-time hooks: it catches commits made before the
+# hooks were installed, made with --no-verify, or pulled in from elsewhere. CI
+# re-checks the same thing on the pull request, since a hook only runs on the
+# machine that has it configured.
+set -uo pipefail
+
+root=$(git rev-parse --show-toplevel)
+zero=$(git hash-object --stdin </dev/null | tr '0-9a-f' '0')
+
+status=0
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  [ "$local_sha" = "$zero" ] && continue   # branch deletion, nothing to check
+
+  # Only the commits this push introduces: everything on the branch that no
+  # remote has seen yet. The two cases used to differ — an existing branch was
+  # checked with "$remote_sha..$local_sha", which after a merge from develop
+  # contains every upstream commit that merge brought in. They were then
+  # linted as if they were new, so ONE non-conforming commit on develop
+  # blocked every branch that synced with it, for everyone, and the only
+  # "fix" would have been rewriting shared history. A commit a remote already
+  # holds was checked when it got there, and CI re-lints each PR's own range
+  # (smart-commit.yml uses base..head), so nothing goes unchecked.
+  #
+  # --remotes reads local remote-tracking refs: after a fetch they are
+  # current, but in a stale checkout an upstream commit can still be flagged.
+  # `git fetch` is the fix, not --no-verify.
+  revs=("$local_sha" --not --remotes)
+
+  "$root/.githooks/lint-identity.sh" --range "${revs[@]}" || status=1
+  "$root/.githooks/lint-commits.sh" --range "${revs[@]}" || status=1
+done
+
+exit "$status"

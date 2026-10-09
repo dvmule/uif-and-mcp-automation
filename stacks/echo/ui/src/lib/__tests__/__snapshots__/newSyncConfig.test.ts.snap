@@ -1,0 +1,118 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildPipelineConfig > AWS incremental with silver is byte-for-byte the pre-split config 1`] = `
+{
+  "enabled": true,
+  "extract": {
+    "jdbc_lower_bound": 1,
+    "jdbc_partition_col": "ORGANIZATION_ID",
+    "jdbc_partitions": 8,
+    "jdbc_upper_bound": 9000,
+    "mode": "incremental",
+    "table": "FIPM.X",
+    "watermark_col": "LAST_UPDATE_DATE",
+    "watermark_fallback_col": "CREATION_DATE",
+    "watermark_value": "1970-01-01T00:00:00",
+  },
+  "glue": {
+    "num_workers": 5,
+    "timeout_minutes": 120,
+    "worker_type": "G.2X",
+  },
+  "pipeline_id": "fipm-x-daily",
+  "quality": {
+    "min_rows_expected": 1155,
+    "not_null_cols": [
+      "INVENTORY_ITEM_ID",
+      "ORGANIZATION_ID",
+    ],
+  },
+  "replication": {
+    "gcs": {
+      "bucket": "echo-dev-bronze",
+      "credentials_secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/gcp-sa",
+      "enabled": true,
+      "prefix": "bronze/fipm/x/",
+    },
+    "silver_bq": {
+      "bq_dataset": "echo_dev_silver_fipm",
+      "bq_location": "EU",
+      "bq_project": "informatica-etl-nonprd",
+      "bucket": "echo-dev-silver",
+      "credentials_secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/gcp-sa",
+      "enabled": true,
+      "prefix": "silver/fipm/x/",
+    },
+  },
+  "schedule": {
+    "frequency": "daily",
+  },
+  "silver": {
+    "database": "echo_dev_silver_fipm",
+    "enabled": true,
+    "primary_key_cols": [
+      "INVENTORY_ITEM_ID",
+      "ORGANIZATION_ID",
+    ],
+    "s3_path": "s3://echo-dev-silver/data/fipm/x/",
+    "soft_delete": {
+      "flag_col": "ACTIVE_FLAG",
+      "inactive_val": "N",
+    },
+    "table": "X",
+  },
+  "source": {
+    "secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/oracle-fipm",
+  },
+  "target": {
+    "compression": "snappy",
+    "s3_path": "s3://echo-dev-bronze/data/fipm/x/",
+  },
+  "version": "latest",
+}
+`;
+
+exports[`buildPipelineConfig > GCP full without silver is byte-for-byte the pre-split config 1`] = `
+{
+  "destination": {
+    "cloud": "gcp",
+    "gcp_credentials_secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/gcp-sa",
+  },
+  "enabled": true,
+  "extract": {
+    "jdbc_lower_bound": null,
+    "jdbc_partition_col": null,
+    "jdbc_partitions": null,
+    "jdbc_upper_bound": null,
+    "mode": "full",
+    "table": "FIPM.X",
+    "watermark_col": null,
+    "watermark_fallback_col": null,
+    "watermark_value": "1970-01-01T00:00:00",
+  },
+  "glue": {
+    "num_workers": 2,
+    "timeout_minutes": 120,
+    "worker_type": "G.1X",
+  },
+  "pipeline_id": "fipm-x-weekly",
+  "quality": {
+    "min_rows_expected": undefined,
+    "not_null_cols": [
+      "INVENTORY_ITEM_ID",
+    ],
+  },
+  "schedule": {
+    "frequency": "weekly",
+  },
+  "silver": undefined,
+  "source": {
+    "secret_arn": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:echo/dev/oracle-eds",
+  },
+  "target": {
+    "compression": "snappy",
+    "gcs_path": "gs://echo-dev-bronze/fipm/x/",
+  },
+  "version": "latest",
+}
+`;

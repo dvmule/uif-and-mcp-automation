@@ -1,0 +1,33 @@
+version = 0.1
+
+# default = the gps-sandbox manual deploy path (scripts/deploy.ps1).
+[default.deploy.parameters]
+stack_name = "product-change-pipeline-test"
+resolve_s3 = true
+s3_prefix = "product-change-pipeline"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "ProjectName=product-change-pipeline Environment=test"
+
+[default.global.parameters]
+region = "us-east-1"
+
+# dev = a `sam deploy --config-env dev` run. No workflow invokes it today; the
+# flags live here so a hand run matches CI. Artifacts go to the gold-artifacts
+# bucket - NOT resolve_s3, whose bootstrap stack the OIDC role may not
+# create. sam merges samconfig with CLI flags, and resolve_s3 here would
+# conflict with --s3-bucket on the CLI - so the CI flags live HERE, in one
+# place, and the workflow passes only the config-env.
+[dev.deploy.parameters]
+stack_name = "product-change-pipeline-dev"
+s3_bucket = "uif-echo-dev-gold-artifacts"
+s3_prefix = "product-change-pipeline"
+region = "eu-west-1"
+confirm_changeset = false
+fail_on_empty_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "ProjectName=product-change-pipeline Environment=dev"
+
+[dev.global.parameters]
+region = "eu-west-1"

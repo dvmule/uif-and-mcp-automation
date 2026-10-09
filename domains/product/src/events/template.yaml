@@ -1,0 +1,376 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Run-based product change pipeline with client subscriptions: the caller
+  invokes the Lambda with the run JSON ({"run_id": ...}); the Lambda is a
+  thin trigger that starts the Event Fabric Processor Glue job (and will
+  also invoke the API registry - planned, ~2 days after 2026-08-24). The
+  Glue job registers the run in the DynamoDB run registry (reprocessing
+  record), queries the run's products from the gold Glue-catalog table via
+  Athena, projects each per channel from product.mapping.json (read by the
+  Glue job, not the Lambda) and publishes each projected envelope ONCE to
+  the domain event bus tagged <schema>.<channel>. GENERATED
+  client-subscription rules (from sample-data/clients.json, via
+  scripts/generate-client-rules.py) fan each tag out to every subscribed
+  client's OWN queue / stream / API endpoint.
+  Standards: UIF capabilities/event/{guidelines.md,streaming.md}.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: product-change-pipeline
+  Environment:
+    Type: String
+    Default: test
+    AllowedValues: [test, dev, sand]
+  GlueJobRoleArn:
+    Type: String
+    Default: ''
+    Description: >
+      IAM role ARN of the gold Glue job. When set, a resource-based policy is
+      added letting that role invoke the processor Lambda (the Glue role then
+      needs no lambda:InvokeFunction statement of its own). Leave blank to
+      manage the permission on the Glue job role instead.
+  GlueDatabase:
+    Type: String
+    Default: gold_product
+    Description: Glue Data Catalog database holding the gold product table.
+  GlueTable:
+    Type: String
+    Default: product
+    Description: Gold table queried (via Athena) for a run's products.
+  AthenaWorkgroup:
+    Type: String
+    Default: primary
+    Description: Athena workgroup the Event Fabric Processor's run query executes in.
+  GoldDataBucketName:
+    Type: String
+    Default: ''
+    Description: >
+      Name of the S3 bucket holding the gold table's data files. When set,
+      the Event Fabric Processor gets s3:GetObject/ListBucket on it (required
+      unless Lake Formation vends credentials for the table).
+  GoldKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >
+      KMS key ARN the gold data is encrypted with (kms:Decrypt granted to the
+      Event Fabric Processor when set). Leave blank for unencrypted/SSE-S3 data.
+  EventSourceUri:
+    Type: String
+    Default: 'urn:pearson:svc:product-change-pipeline'
+    Description: >
+      CloudEvents `source` attribute for events this pipeline publishes.
+      Pearson-mandated format: urn:pearson:svc:<service-name> (guidelines.md §1).
+  EventDataSchemaUri:
+    Type: String
+    Default: 'https://schemas.pearson.com/product/product-{operation}-data/v1'
+    Description: >
+      CloudEvents `dataschema` attribute - the registered schema location;
+      {operation} is filled per change verdict (created / updated).
+      (Apicurio; streaming.md §4).
+  ApiBaseUrl:
+    Type: String
+    Default: 'https://example.com'
+    Description: >
+      Base URL prefixed to every client's API endpoint path from clients.json
+      (e.g. base https://api.pearson.com + /api/ell/product). The placeholder
+      default deploys fine but deliveries to it fail to the DLQ - override
+      with the real gateway at deploy time.
+  ApiChannelApiKey:
+    Type: String
+    Default: 'placeholder-api-key'
+    NoEcho: true
+    Description: >
+      x-api-key sent by the shared client API connection. For production,
+      per-client Secrets Manager-backed connections (go-live checklist).
+
+Conditions:
+  HasGlueJobRoleArn: !Not [!Equals [!Ref GlueJobRoleArn, '']]
+  HasGoldDataBucket: !Not [!Equals [!Ref GoldDataBucketName, '']]
+  HasGoldKmsKey: !Not [!Equals [!Ref GoldKmsKeyArn, '']]
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 180 # Athena query adds seconds-to-tens-of-seconds per run
+    MemorySize: 256
+
+Resources:
+  # Holds config/product.mapping.json (runtime read) and athena-results/
+  # (the run query's output location). Product data itself now comes from
+  # the gold Glue-catalog table via Athena (2026-08-21).
+  # No trigger wiring: since 2026-08-19 the Glue job invokes the Lambda
+  # directly, so product_changes/ uploads and S3 event notifications are gone.
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Dead-letter target for failed Lambda invocations (guidelines.md §4:
+  # "never silent-drop"). Named as the event type's `.dlq` counterpart per
+  # the ITSOC standard (dots mapped to hyphens for the SQS charset),
+  # environment-prefixed so parallel deploys in one account don't collide.
+  ProductChangeDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-${Environment}-pearson-product-product-changed-v1-dlq'
+      MessageRetentionPeriod: 1209600 # 14 days (SQS maximum, per the standard)
+      SqsManagedSseEnabled: true
+
+  # DLQ alarm on any non-zero depth (Streams, Retention & Error Handling >
+  # Defaults: "DLQ alarm: any non-zero depth").
+  ProductChangeDLQDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-dlq-depth'
+      AlarmDescription: Dead-letter queue has messages - investigate and redrive within 14 days.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ProductChangeDLQ.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # The domain event bus. The Event Fabric Processor Glue job publishes
+  # per-channel projected envelopes here (detail-type <schema>.<channel>);
+  # the GENERATED client-subscription rules below route them to each
+  # client's own destinations. The product ATTRIBUTE rule lives in the
+  # Glue job (2026-08-24), no longer in the Lambda.
+  ProductChangeEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-product-change-bus'
+
+  # Run registry: every announced run is recorded (STARTED -> COMPLETED /
+  # FAILED with counts) so any run can be found and reprocessed later by
+  # re-invoking with the same run_id (attempts is incremented on reprocess).
+  RunRegistryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectName}-${Environment}-event-runs'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: run_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: run_id
+          KeyType: HASH
+
+  EventFabricProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventFabricProcessor
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Data bucket: job script + mapping read, Athena results write.
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                Resource: !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-${AWS::AccountId}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-${AWS::AccountId}'
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !GetAtt ProductChangeEventBus.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                Resource: !GetAtt RunRegistryTable.Arn
+              # Run query against the gold table (Athena engine + Glue catalog).
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: !Sub 'arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkgroup}'
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                Resource:
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog'
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabase}'
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabase}/${GlueTable}'
+                  - !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabase}/${GlueTable}_changes'
+              # No-op unless the gold table is Lake Formation-governed;
+              # required there for Athena to vend the table's credentials.
+              # The LF grants themselves (DESCRIBE on db, SELECT/DESCRIBE on
+              # table, to THIS role) are issued outside CloudFormation.
+              - Effect: Allow
+                Action:
+                  - lakeformation:GetDataAccess
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/*'
+              - !If
+                - HasGoldDataBucket
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                  Resource: !Sub 'arn:aws:s3:::${GoldDataBucketName}/*'
+                - !Ref AWS::NoValue
+              - !If
+                - HasGoldDataBucket
+                - Effect: Allow
+                  Action:
+                    - s3:ListBucket
+                    - s3:GetBucketLocation
+                  Resource: !Sub 'arn:aws:s3:::${GoldDataBucketName}'
+                - !Ref AWS::NoValue
+              - !If
+                - HasGoldKmsKey
+                - Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                  Resource: !Ref GoldKmsKeyArn
+                - !Ref AWS::NoValue
+
+  # THE Event Fabric Processor: run registration (DynamoDB), gold-table
+  # fetch (Athena), mapping-based channel gating, and bus publishing all
+  # live in this job (moved out of the Lambda, 2026-08-24). Python shell -
+  # boto3 orchestration, no Spark needed. MaxRetries=0: a retry would
+  # re-publish events; reprocessing is deliberate, via the run registry.
+  # deploy.ps1 uploads src/glue/event_fabric_processor.py to ScriptLocation.
+  EventFabricProcessorJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-event-fabric-processor'
+      Description: Registers a run in DynamoDB, fetches its products from the gold table, projects per channel, publishes to the domain bus.
+      Role: !GetAtt EventFabricProcessorRole.Arn
+      Command:
+        Name: pythonshell
+        PythonVersion: '3.9'
+        ScriptLocation: !Sub 's3://${ProjectName}-${Environment}-${AWS::AccountId}/glue/event_fabric_processor.py'
+      MaxCapacity: 0.0625
+      MaxRetries: 0
+      Timeout: 15 # minutes
+      ExecutionProperty:
+        MaxConcurrentRuns: 5
+      DefaultArguments:
+        '--data_bucket': !Sub '${ProjectName}-${Environment}-${AWS::AccountId}'
+        '--mapping_key': config/product.mapping.json
+        '--dynamo_table': !Ref RunRegistryTable
+        '--event_bus_name': !Ref ProductChangeEventBus
+        '--schema_name': product
+        '--glue_database': !Ref GlueDatabase
+        '--glue_table': !Ref GlueTable
+        # Events are driven from the change log {table}_changes.
+        '--changes_table': !Sub '${GlueTable}_changes'
+        '--join_key': product_id
+        '--run_id_column': run_id
+        '--athena_workgroup': !Ref AthenaWorkgroup
+        '--athena_output': !Sub 's3://${ProjectName}-${Environment}-${AWS::AccountId}/athena-results/'
+        '--event_type': com.pearson.product.product.{operation}.v1
+        '--event_source': !Ref EventSourceUri
+        '--event_dataschema': !Ref EventDataSchemaUri
+        '--data_classification': internal
+        '--pii_present': 'false'
+        # Client rules filter on data.<routing_attribute>; the job fails
+        # closed if the mapping stops enabling it on any channel.
+        '--routing_attribute': organizationCode
+
+  # Thin trigger: validates {"run_id": ...} and starts the Event Fabric
+  # Processor. PLANNED (~2 days after 2026-08-24): also invokes the API
+  # registry from here.
+  ProductChangeProcessor:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-processor'
+      CodeUri: src/
+      Handler: handler.lambda_handler
+      Description: >
+        Thin trigger - starts the Event Fabric Processor Glue job for the
+        announced run_id (API registry invocation planned here next).
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt ProductChangeDLQ.Arn
+      Environment:
+        Variables:
+          EVENT_FABRIC_GLUE_JOB: !Ref EventFabricProcessorJob
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - glue:StartJobRun
+                - glue:GetJobRun
+              Resource: !Sub 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/${ProjectName}-${Environment}-event-fabric-processor'
+
+  # Trigger: the upstream caller invokes the Lambda directly with the run
+  # JSON as payload. This optional resource-based policy lets that caller's
+  # role invoke without needing lambda:InvokeFunction in its own policy.
+  GlueInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasGlueJobRoleArn
+    Properties:
+      FunctionName: !Ref ProductChangeProcessor
+      Action: lambda:InvokeFunction
+      Principal: !Ref GlueJobRoleArn
+
+  # Client-subscription rules RETIRED (2026-09-17): subscriptions live in
+  # uif-event-{env}-subscription-configs; per-subscription rules are the
+  # provisioner's to create. The generated channel rules are gone.
+
+Outputs:
+  DataBucketName:
+    Description: S3 bucket containing config/ and athena-results/
+    Value: !Ref DataBucket
+  GoldTable:
+    Description: Gold Glue-catalog table the Event Fabric Processor queries (via Athena) for a run's products
+    Value: !Sub '${GlueDatabase}.${GlueTable}'
+  EventFabricProcessorJobName:
+    Description: Glue job owning run registration, gold fetch, channel gating, and bus publishing
+    Value: !Ref EventFabricProcessorJob
+  RunRegistryTableName:
+    Description: DynamoDB table recording every run (STARTED/COMPLETED/FAILED) for reprocessing
+    Value: !Ref RunRegistryTable
+  EventType:
+    Description: CloudEvents `type` delivered on every channel; {operation} is created / updated per verdict (see asyncapi.yaml)
+    Value: com.pearson.product.product.{operation}.v1
+  ProductChangeEventBusName:
+    Description: Domain event bus carrying <schema>.<channel> envelopes to the client rules
+    Value: !Ref ProductChangeEventBus
+  DeadLetterQueueUrl:
+    Description: SQS queue holding failed Lambda invocations
+    Value: !Ref ProductChangeDLQ
+  LambdaFunctionName:
+    Description: Thin-trigger Lambda that starts the Event Fabric Processor for a run
+    Value: !Ref ProductChangeProcessor
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt ProductChangeProcessor.Arn

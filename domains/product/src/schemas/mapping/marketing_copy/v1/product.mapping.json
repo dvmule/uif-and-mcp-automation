@@ -1,0 +1,140 @@
+{
+  "$schema": "../../../../../../../stacks/apicurio/standards/gold-attribute-mapping.schema.json",
+  "domain": "product",
+  "table": "gold_product.marketing_copy",
+  "registry": {
+    "group": "product",
+    "artifact": "product.marketing-copy.mapping",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "drivingTable": "XXPSO_EGO_MARKET_COPY_DATA",
+  "entityKey": [
+    {
+      "goldColumn": "contentId",
+      "drivingColumn": "CONTENT_ID"
+    }
+  ],
+  "batch": {
+    "requestedBy": "Reyas Ahamed H",
+    "targetDate": "2026-09-03",
+    "backfillMode": "silent",
+    "newChannel": null
+  },
+  "columns": [
+    {
+      "goldColumnName": "contentId",
+      "businessDescription": "Content identifier — the natural key of the library, and the one path segment of the retrieval URL",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "XXPSO_EGO_MARKET_COPY_DATA",
+        "column": "CONTENT_ID",
+        "filter": "VERSION = 'C' AND (DISABLED_FLAG IS NULL OR DISABLED_FLAG <> 'Y') AND CONTENT_ID IS NOT NULL"
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": true
+      },
+      "nullable": false,
+      "notes": "Entity-key column. The filter here is the ENTITY filter (the intake contract has no entity-level filter field — program's precedent): version 'C' is the current row, disabled rows and null keys are out. Live-measured 2026-09-03: contentId is effectively unique at version 'C' (6,561,618 distinct / 6,561,622 rows; the 4 duplicates are full-key duplicate rows deduped latest-by-LAST_UPDATE_DATE in the SQL). The composite key originally proposed (contentId+type+owningMarket+audience+geoVisibility) adds zero uniqueness, and geo-visibility does not exist in this source at all — it is a product-side assignment attribute (EAV group 1181)."
+    },
+    {
+      "goldColumnName": "marketingCopyTypeCode",
+      "businessDescription": "Content type (60 distinct values at version 'C')",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "XXPSO_EGO_MARKET_COPY_DATA",
+        "column": "TYPE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "owningMarketCode",
+      "businessDescription": "Market that owns this copy",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "XXPSO_EGO_MARKET_COPY_DATA",
+        "column": "OWNING_MARKET",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "audienceCode",
+      "businessDescription": "Intended audience of the copy",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "XXPSO_EGO_MARKET_COPY_DATA",
+        "column": "TARGET_AUDIENCE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "marketingCopyText",
+      "businessDescription": "Short human-readable description of the copy",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "XXPSO_EGO_MARKET_COPY_DATA",
+        "column": "COPY_DESC",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "marketingCopyContentText",
+      "businessDescription": "The full marketing copy text — retrieved on demand via the content service, never carried on a feed",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "XXPSO_EGO_MARKET_COPY_DATA",
+        "column": "CONTENT",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "27,701 rows carry NULL content at version 'C' (live, 2026-09-03) — kept, because the metadata is valid; the retrieval API answers 404 for them. Max observed length 348,438 chars, avg 1,665. The attachment column is deliberately excluded (owner decision 2026-09-03)."
+    }
+  ]
+}

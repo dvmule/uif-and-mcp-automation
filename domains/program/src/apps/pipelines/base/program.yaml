@@ -1,0 +1,236 @@
+# Gold pipeline: program — environment-agnostic base definition.
+# Per-env values (S3 paths, sizing) live in pipelines/overlays/{env}/program.yaml.
+# Synced to DynamoDB by product's scripts/sync_pipelines.py (config-as-code,
+# ADR-0004) — the script is entity-agnostic but physically lives in the product
+# domain until UIFPE-122 settles its home.
+#
+# Runtime-owned fields (watermarks, channel registry, publish cursors) are NEVER
+# defined here — the transform owns them and sync preserves them.
+
+gold_id: program
+domain: program
+
+schema:
+  version: v1
+
+# ── Sources ─────────────────────────────────────────────────────────────────
+# These aliases MUST match src/schemas/mapping/program/v1/manifest.yaml EXACTLY,
+# and the failure modes are asymmetric and both nasty:
+#   * in the manifest but NOT here  -> never registered as a temp view, and the
+#     SQL dies at TABLE_OR_VIEW_NOT_FOUND;
+#   * here but NOT in the manifest  -> no key_mapping, and the transform refuses
+#     to run at all (ADR-0003 D1).
+# Both files, always. `key_mapping` itself is manifest-side only — it is a
+# mapping concern, not a pipeline one.
+sources:
+  # The driving table. `is_source_of_truth` marks it for two separate jobs:
+  # reconcile anti-joins it for orphan detection, and the transform's Phase 2
+  # replaces THIS alias's temp view with only the affected entities.
+  - alias: items
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+    is_source_of_truth: true
+  - alias: items_ext
+    silver_table: uif_echo_{env}_silver_mdm.ego_mtl_sy_items_ext_b
+    watermark_col: _silver_updated_at
+  - alias: items_tl
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_tl
+    watermark_col: _silver_updated_at
+  - alias: related
+    silver_table: uif_echo_{env}_silver_mdm.mtl_related_items
+    watermark_col: _silver_updated_at
+  # Relationship-type decode table. Carries neither key column, so its manifest
+  # key_mapping is the constant `organizationId: CAST(82 AS BIGINT)` — one
+  # changed lookup row fans out to every program row. That is honest and
+  # correct (relationshipType sits on every relatedPrograms element), and it
+  # mirrors product's org_params. Do not narrow it to dodge the cost.
+  - alias: rel_types
+    silver_table: uif_echo_{env}_silver_mdm.fnd_lookup_values_vl
+    watermark_col: _silver_updated_at
+  # SECOND alias over the driving table, and the reason it exists: Phase 2
+  # restricts the `items` view to the entities being rebuilt, while both array
+  # CTEs must resolve OTHER items' SEGMENT1 (the associated product's, the
+  # related program's). Reading `items` there would silently see only the rows
+  # already in the rebuild set.
+  # No "full" flag is needed or available: generic_gold_transform.py:734 calls
+  # register_full_views(exclude=driving["alias"]), so EVERY non-driving alias is
+  # registered full. The only requirement is that this one is not the SoT.
+  - alias: items_all
+    silver_table: uif_echo_{env}_silver_mdm.mtl_system_items_b
+    watermark_col: _silver_updated_at
+
+target:
+  database: uif_echo_{env}_gold_program
+  table: program
+  # The MERGE key, and it has to be the Oracle pair. Only mtl_system_items_b
+  # carries SEGMENT1, so four of the six sources above cannot express
+  # programId, and validate_key_mappings refuses a primary key a source cannot
+  # project (ADR-0003 D1). Do not "simplify" this to programId — the transform
+  # stops running.
+  primary_key_cols:
+    - inventoryItemId
+    - organizationId
+  # The BUSINESS key, which is what a read surface addresses a row by
+  # (UIFPE-521). Program is the only entity where the two differ. The serving
+  # copy carries a secondary index on it, so GET /program/{programId} resolves
+  # without the Oracle pair ever reaching the surface — both key columns are
+  # `x-channels: []`.
+  #
+  # An index does not enforce uniqueness the way a merge key does, so this
+  # rests on measurement: 14,628 rows, 14,628 distinct programId, 0 nulls, one
+  # organization (2026-09-29). The API reads two rows and refuses with a 500 on
+  # a second, which raises gold-serving-api-entity-key-not-unique.
+  entity_key_cols:
+    - programId
+
+# ── Schedule (per-pipeline since UIFPE-149) ─────────────────────────────────
+schedule:
+  # Daily, matching product. Program's sources ARE product's PDH tables, so a
+  # faster rung buys nothing the daily incremental does not already catch.
+  frequency: gold-24h
+  # Deliberately NOT product's 06:30. Per-pipeline start times exist precisely
+  # so two daily tables need not collide, and these two read the SAME Silver
+  # tables (mtl_system_items_b, the 193.7M-row EAV) — overlapping them competes
+  # for Glue capacity and Silver read throughput for no gain. 07:15 leaves
+  # product's ~25-40 min incremental room to finish first.
+  # PROVISIONAL: chosen on reasoning, not measurement. Revisit once program's
+  # real runtime is known — it is one config line, no Terraform change.
+  # Quote it: YAML 1.1 parses an unquoted 7:15 as the integer 435.
+  start_time: "07:15"
+  failure_cooldown_minutes: 30
+
+  # ── Periodic recompute leg (ADR-0020 decision 5) ──────────────────────────
+  # These two arrays cannot be change-detected, so no incremental will ever
+  # notice them go stale:
+  #
+  #   associatedProducts — its link rows live in EAV group 1421 keyed by the
+  #     PRODUCT's item id, naming the program only as a ppid STRING.
+  #     build_key_detection_sql is a single-table projection (gold_cdc.py:545),
+  #     so "ppid -> inventoryItemId" (a join) is inexpressible. A product joining
+  #     or leaving a program is invisible to program's watermark scan.
+  #
+  #   relatedPrograms — its LINK changes ARE detected (mtl_related_items is keyed
+  #     by the program's own PK), but a related program's ppid being RENAMED is a
+  #     change on ANOTHER item's row and is not. Included here because it is the
+  #     same job at no extra scheduling cost.
+  #
+  # `emit` writes op=REFRESH change-log rows per moved channel. Deliberately not
+  # `--rebuild`, which writes no change-log rows and would repair the table while
+  # notifying no consumer.
+  #
+  # The leg rides the 07:15 run itself, so there is no second clock to order
+  # against the incremental and nothing can overtake it.
+  #
+  # THE REAL FIX is upstream: a program-keyed Silver view of group 1421 would
+  # retire this entirely. Raise with the Silver team; until then this is the
+  # mitigation, and it is a mitigation, not a design.
+  recompute:
+    # NOT "which columns this job loads" — the run loads all twelve. This is
+    # the far narrower set whose STALENESS DETECTION CANNOT SEE, and the only
+    # reason to add a column here is that its change-detection is structurally
+    # impossible. The other ten resolve to this program's own gold key through
+    # their sources' key_mapping and are detected normally; listing them would
+    # turn every eighth run into a full recompute for no gain.
+    undetectable_columns:
+      - associatedProducts
+      - relatedPrograms
+      # parentProductId walks the SAME reverse-keyed 1421 link as
+      # associatedProducts, and additionally depends on groups 1401/1164/741 on
+      # OTHER items — so it is even less detectable than the other two. Same
+      # leg, no extra cost.
+      - parentProductId
+    every_n_runs: 8
+
+# ── Reconcile ───────────────────────────────────────────────────────────────
+# LIVE. Program's `SEGMENT1 LIKE 'P2%' AND ORGANIZATION_ID = 82` filter means a
+# row leaves the domain two ways, and the transform only upserts — so this
+# anti-join is the only thing that ever removes one. Both flags are Git-owned
+# (neither is in sync_pipelines' RUNTIME_PATHS), so this file is the only place
+# they change.
+#
+# It observed first, deliberately, and the observation settled it. The 14 rows
+# are absent from mtl_system_items_b at EVERY retained Silver snapshot —
+# 2026-09-15, -18 and -23 — while the gold rows were built on 2026-09-12,
+# before the oldest of them. The item master GREW by 40 rows across those
+# reloads, so this is not a truncated load. mtl_system_items_tl still carries
+# 28 rows for the same items after two full reloads, which is Oracle not
+# cascading a delete to its translations rather than Silver losing data. Owner
+# confirmed the source deletes (2026-09-29).
+#
+# So they are gone upstream, and gold kept them only because reconcile was off
+# since first load — the exact gap this block used to warn about. The deletes
+# are ANNOUNCED: reconcile appends DELETE verdicts to the change log before the
+# merge (ADR-0003 D5/D6), so consumers are told, and a row that ever returns to
+# Silver is rebuilt on the next run.
+reconcile:
+  enabled: true
+  dry_run: false
+  max_deletes_per_run: 5000
+
+# Serve this entity from the SHARED gold serving table. One table and one
+# Lambda cover every entity, so this line is the whole opt-in — no
+# infrastructure change. Absent means not served.
+#
+# PRE-FLIGHT, run against the real item the engine builds rather than against
+# an estimate, because price's first attempt measured whether the data FITS
+# when the binding question was whether the engine could REPRESENT it:
+#
+#   associatedProducts   ARRAY<STRING>  -> {"L":[{"S":...}]}   first value
+#                                          array ever served
+#   relatedPrograms      ARRAY<STRUCT>  -> {"L":[{"M":...}]}   nested path
+#   relevanceValue       integer        -> {"N":"95"}          typed, not a
+#                                          stringified number
+#   widest item                            3,683 bytes, 111x headroom
+#
+# Verified through the production UNLOAD-to-JSON path, not Athena's text
+# results — in the text results an ARRAY<STRING> renders as a bracketed string
+# and the probe reports a bug that does not exist.
+#
+# The first load writes ~14,628 items, small enough that no baseline watch is
+# needed the way price's 1.49M was.
+serving:
+  enabled: true
+
+# Publish GoldMergeCompleted to uif-event-{env}-bus when a merge finishes.
+# Absent means no event.
+announce: true
+
+channels:
+  bootstrap_mode: silent
+backfill_mode: silent
+
+# Snapshot pre-gate: the dispatcher skips StartJobRun entirely when every
+# source's Iceberg metadata_location matches the last successful run's map.
+# Uncertainty always dispatches. This is what makes a daily cadence cheap on a
+# day Silver did not commit.
+snapshot_gate: true
+
+glue:
+  # ── CDC profile ────────────────────────────────────────────────────────────
+  # Matches product's rather than scaling to program's row count, ON PURPOSE.
+  # Program's OUTPUT is a small slice (P2% at org 82), but its INPUT is the same
+  # set of large Silver tables product reads — ego_mtl_sy_items_ext_b alone is
+  # 193.7M rows, and the EAV pivots plus the two-hop array joins shuffle against
+  # the full table before the domain filter can help. Sizing therefore tracks
+  # the source scan, not the result size.
+  # PROVISIONAL: no program run has been measured yet. Reduce it on evidence,
+  # not on the assumption that a small table means a small job.
+  worker_type: G.1X
+  num_workers: 8
+  timeout_minutes: 180
+  # Shared runtime knob, read on every run regardless of profile.
+  max_affected_fraction: 0.5
+
+  # ── Full-load profile ─────────────────────────────────────────────────────
+  # Dispatcher-selected when the target table is absent (the first load) and for
+  # manual --rebuild runs. Never falls back to the lean block: an undersized
+  # initial CTAS times out, retries at the same size (max_retries=1) and repeats
+  # next cadence. False-heavy costs money; false-lean is an outage loop.
+  full_load:
+    worker_type: G.2X
+    num_workers: 8
+    timeout_minutes: 180
+
+metadata:
+  owner: reyasahamed.habibrahman@pearson.com
+  domain: program

@@ -1,0 +1,34 @@
+{
+  "customer_id": { "S": "pmc" },
+  "domain_detail_type": { "S": "program#program.updated.v1" },
+  "subscription_id": { "S": "e9a42ace-09c1-408e-a165-93c4063d2fea" },
+  "policy_sid": { "S": "uife9a42ace09c1408ea16593c4063d2fea" },
+  "domain": { "S": "program" },
+  "operation": { "S": "updated" },
+  "version": { "S": "v1" },
+  "detail_type": { "S": "program.updated.v1" },
+  "rule_name": { "S": "uif-event-dev-on-program-program-updated-v1-pmc" },
+  "target": { "M": {
+    "target_type": { "S": "SQS" },
+    "target_arn": { "S": "arn:aws:sqs:eu-west-1:283556840805:uif-event-dev-pmc-program-program-updated-v1" },
+    "target_config": { "M": {
+      "consumer_principal_arn": { "S": "arn:aws:iam::283556840805:root" },
+      "dlq_arn": { "NULL": true },
+      "retry_policy": { "M": {
+        "max_attempts": { "N": "3" },
+        "max_age_seconds": { "N": "900" }
+      } },
+      "message_group_id": { "NULL": true }
+    } }
+  } },
+  "target_arn": { "S": "arn:aws:sqs:eu-west-1:283556840805:uif-event-dev-pmc-program-program-updated-v1" },
+  "status": { "S": "PENDING" },
+  "status_reason": { "NULL": true },
+  "record_version": { "N": "1" },
+  "created_at": { "S": "2026-09-29T00:00:00Z" },
+  "created_by": { "S": "aparajita.konwar@pearson.com (UIFPE-401 pmc program onboarding)" },
+  "updated_at": { "S": "2026-09-29T00:00:00Z" },
+  "updated_by": { "S": "aparajita.konwar@pearson.com" },
+  "deleted_at": { "NULL": true },
+  "deleted_by": { "NULL": true }
+}

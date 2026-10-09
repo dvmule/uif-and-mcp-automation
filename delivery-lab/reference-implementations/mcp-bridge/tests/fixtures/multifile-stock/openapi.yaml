@@ -1,0 +1,218 @@
+# Stock retrieval API (UIFPE-518) — the registered contract for the gold stock
+# entity, and the pilot for the gold-entity API pattern.
+#
+# Contract-first per capabilities/api/guidelines.md. The response schema is
+# NOT restated here: it $refs stock-data-api.json, the generated api-tier
+# projection of domains/stock/src/schemas/gold/stock/v1/master.json. That is
+# the rule established by UIFPE-524 — a hand-authored copy of a generated
+# schema is a restatement, and the two drift silently.
+#
+# The gold primary key IS the API key here: (productId, organizationCode), both
+# on the api tier, neither an Oracle surrogate. So the composite grain maps
+# straight onto a DynamoDB (partition key, sort key) and both reads below are
+# point lookups with no secondary index.
+#
+# Security, stated honestly: consumer auth is enforced at the Mule gateway
+# (owner decision 2026-09-03). The EntraID scheme below declares the contract's
+# auth model per the platform rule. The backend's own defence in depth is a
+# gateway-injected shared header, which is not a consumer concern and so is not
+# a scheme here — it surfaces only as a 403 if someone bypasses the gateway.
+openapi: 3.1.0
+info:
+  title: Stock API
+  version: 1.0.0
+  description: >
+    Returns the on-hand and available-to-promise position for a product in a
+    fulfillment organization. One read addresses a single organization; the
+    other returns every organization carrying that product. Responses are
+    cacheable — honour ETag and Cache-Control.
+  contact:
+    name: Enterprise Data Connect
+    email: reyasahamed.habibrahman@pearson.com
+x-registry:
+  group: stock
+  artifact: stock-api
+  compatibility: BACKWARD
+tags:
+  - name: stock
+    description: Gold stock positions by product and fulfillment organization.
+servers:
+  - url: https://api1-dev.pearson.com/uif/v1
+    description: dev (Mule gateway)
+  - url: https://api1-stg.pearson.com/uif/v1
+    description: uat (Mule gateway)
+  - url: https://api1-us1.pearson.com/uif/v1
+    description: prod (Mule gateway)
+security:
+  - EntraID: []
+paths:
+  /stock/{productId}/organization/{organizationCode}:
+    get:
+      operationId: getStockByProductAndOrganization
+      tags: [stock]
+      summary: One product's stock position in one organization
+      description: >
+        The canonical single read. Resolves to exactly one item, which is why
+        the path segments are singular.
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+        - name: organizationCode
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 32
+          description: Fulfillment organization code.
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: The stock position for that product and organization.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "./stock-data-api.json"
+        "304":
+          description: Not modified — the cached representation is current.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: >
+            No stock row for that product and organization. Distinct from a
+            product that exists with a zero quantity, which is a 200.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "4XX":
+          $ref: "#/components/responses/OtherClientError"
+        "5XX":
+          $ref: "#/components/responses/OtherServerError"
+
+  /stock/{productId}:
+    get:
+      operationId: getStockByProduct
+      tags: [stock]
+      summary: One product's stock position in every organization carrying it
+      description: >
+        Every organization holding the product, as a JSON array. Bounded by the
+        organizations that carry one product, so it is not paginated — this is
+        not a bulk export, and there is no filter parameter until a named
+        consumer brings one.
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: >
+            One entry per organization. An empty array means the product is
+            known but stocked nowhere; an unknown product is a 404.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "./stock-data-api.json"
+        "304":
+          description: Not modified — the cached representation is current.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown product.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "4XX":
+          $ref: "#/components/responses/OtherClientError"
+        "5XX":
+          $ref: "#/components/responses/OtherServerError"
+
+components:
+  securitySchemes:
+    EntraID:
+      type: openIdConnect
+      openIdConnectUrl: https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration
+
+  parameters:
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 256
+      description: >
+        Pearson product identifier. The same value the gold stock row and its
+        change events carry.
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: A previous response's ETag; a match returns 304.
+
+  headers:
+    ETag:
+      schema:
+        type: string
+      description: >
+        A hash of the representation's own content, never a timestamp. Silent
+        maintenance repairs values without moving the row's update timestamp,
+        so a timestamp-derived ETag would let a revalidating cache 304 past a
+        real change indefinitely.
+    CacheControl:
+      schema:
+        type: string
+      description: Caching directives for this representation.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials (enforced at the gateway).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServerError:
+      description: Unexpected service failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    OtherClientError:
+      description: >
+        Any other client error; the specific codes above take precedence. This
+        includes 403 when the gateway's shared backend header is absent or
+        wrong, which surfaces only if a caller bypasses the gateway.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    OtherServerError:
+      description: Any other server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string

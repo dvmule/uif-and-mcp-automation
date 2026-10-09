@@ -1,0 +1,36 @@
+# Gold pipeline: product — uat overlay (deep-merged over
+# pipelines/base/product.yaml). Only per-environment values belong here.
+#
+# SEEDED DISABLED ON PURPOSE. `enabled` is console-owned
+# (sync_pipelines.RUNTIME_PATHS, UIFPE-564): this value seeds a NEW entity and
+# is preserved from the console thereafter. uat's schedule-gold-dispatch-tick
+# rule is already ENABLED, so committing `true` here would put this pipeline
+# into the dispatch rotation as soon as the config is synced. Register it
+# first, verify it, then enable it from the Syncs page.
+enabled: false
+
+schema:
+  master_s3_path: s3://uif-echo-uat-gold-artifacts/schemas/gold/product/v1/master.json
+
+mapping:
+  manifest_s3_path: s3://uif-echo-uat-gold-artifacts/mappings/product/v1/manifest.yaml
+  sql_s3_path: s3://uif-echo-uat-gold-artifacts/mappings/product/v1/sql/product.sql
+
+target:
+  s3_path: s3://uif-echo-uat-gold/product/
+
+# uat's Mule gateway host. Documented in
+# domains/product/docs/design-marketing-copy-content-service.md and labelled
+# "uat (Mule gateway)" in marketing-copy's openapi.yaml servers block — gold
+# rows must never carry a dev URL into another environment.
+sql_vars:
+  content_url_base: https://api1-stg.pearson.com/uif/v1
+
+# Reconcile observes before it deletes in uat. base/product.yaml arms it for
+# real (enabled, dry_run: false, cap 5,000) after dev's UIFPE-704 catch-up, but
+# that backlog was measured in DEV only. uat's gold has never been reconciled,
+# so the first runs here report the orphan count without deleting anything.
+# Check that count, then remove this override in a later release to let
+# reconcile delete.
+reconcile:
+  dry_run: true

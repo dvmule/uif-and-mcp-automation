@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pearson Schema Registry</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      Plus Jakarta Sans only. DM Mono was dropped with the March 2025 palette:
+      Pearson specifies no mono face, DM Mono has no 600 weight (so every
+      `font-mono font-semibold` in the app was a synthesised faux-bold), and
+      it was a second render-blocking request. `font-mono` is now the system
+      mono stack, which needs no network at all.
+
+      800 is requested because the type scale lists it in use; without it the
+      browser synthesises extra-bold from 700.
+    -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

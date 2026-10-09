@@ -1,0 +1,409 @@
+name: Release apicurio
+
+# Cuts the build tag apicurio/vX.Y.Z when stacks/apicurio/VERSION changes on
+# develop. Design: docs/superpowers/specs/2026-09-19-apicurio-release-identity-design.md
+#
+# WHY THIS POLLS FOR THE GATE INSTEAD OF USING workflow_run. A workflow_run
+# trigger only fires for workflow files that live on the DEFAULT branch, and
+# main is 956 commits behind develop with 2 of 28 workflows on it. That is not
+# hypothetical: domain-doc-sync.yml uses workflow_run, is absent from main, and
+# GitHub answers `gh run list` for it with "workflow not found on the default
+# branch" -- it has never run. Polling is correct here for as long as main
+# stays behind.
+#
+# WHY A BUILD TAG'S EVIDENCE IS THE CI GATE AND NOT SMOKE. The two tags in the
+# delivery guide answer two different questions. A build tag answers "what code
+# went into this artifact", so its evidence is the four CI checks. A release
+# tag answers "what was deployed, where, when", so its evidence is smoke and
+# SLO. Deploying is Half 2's job, not this workflow's.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "stacks/apicurio/VERSION"
+      # THIS FILE'S OWN PATH IS DELIBERATELY NOT LISTED HERE, unlike
+      # deploy-apicurio-dev.yml's paths (which lists itself so a change to
+      # the deploy path is exercised by it). That convention does not
+      # transfer here: stacks-ci.yml IS the gate, so it has to test itself
+      # on every edit, but running THIS workflow is not a test of it -- a
+      # push that changes only this file carries no VERSION bump, so
+      # check-version.sh correctly refuses with "tag already exists",
+      # producing a spurious red run on every edit to this file.
+      # workflow-lint is what validates this file instead.
+  workflow_dispatch:
+
+concurrency:
+  group: release-apicurio
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ENV: dev
+  AWS_REGION: eu-west-1
+  COMPONENT: apicurio
+  # Hardcoded for the same reason deploy-apicurio-dev.yml hardcodes it: the
+  # name is built from local.name in bff.tf, and reading it back from
+  # `terraform output` would mean an init against remote state purely to learn
+  # a string this file can state. If it changes in bff.tf, change it here.
+  ECR_REPO: uif-apicurio-dev-bff-ecr-repo
+  TFVARS: stacks/apicurio/infrastructure/terraform/envs/dev.tfvars
+
+jobs:
+  validate:
+    name: Validate the declared version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and tags: check-version.sh compares against every
+          # existing apicurio/v* tag, and a shallow clone has none of them.
+          fetch-depth: 0
+
+      - name: Check VERSION
+        id: check
+        run: |
+          set -euo pipefail
+          tag="$(stacks/apicurio/scripts/check-version.sh stacks/apicurio/VERSION)"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Releasing ${tag}"
+
+  gate:
+    name: Require a green stacks-ci gate on this commit
+    needs: [validate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.poll.outputs.run_id }}
+      conclusion: ${{ steps.poll.outputs.conclusion }}
+    steps:
+      # Full history: the step below walks --first-parent to find which commit
+      # carries this commit's stack evidence.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # WHICH COMMIT'S GATE RUN IS EVIDENCE ABOUT THIS ONE.
+      #
+      # stacks-ci.yml is path-filtered on `stacks/**` and its own file, so a
+      # commit touching neither produces NO run at all -- not a pending one, not
+      # a failed one, nothing. That is the ordinary shape of a workflow-only or
+      # docs-only commit, and releasing on top of one is ordinary too. This gate
+      # used to poll for that absent run for thirty minutes and then fail, which
+      # is exactly what happened when the fix in #376 (a workflow-only change)
+      # became the commit a release was cut from.
+      #
+      # The evidence commit is the nearest first-parent ancestor that touched
+      # the scanned paths. Because no first-parent commit between it and HEAD
+      # touched them, the two trees are identical under stacks/, so its verdict
+      # is a statement about this commit's stack content as well. That
+      # equivalence is the whole justification, so it is VERIFIED below rather
+      # than asserted -- if the trees differ, this exits instead of accepting
+      # evidence about different code.
+      - name: Resolve which commit carries the stack evidence
+        id: evidence
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          evidence="$(git rev-list --first-parent -n 1 "$SHA" -- stacks/ .github/workflows/stacks-ci.yml || true)"
+          if [ -z "$evidence" ]; then
+            echo "::error::No ancestor of ${SHA} has ever touched stacks/ or stacks-ci.yml, so there is no gate evidence to find. This is not a releasable commit."
+            exit 1
+          fi
+          if [ "$evidence" != "$SHA" ]; then
+            if ! git diff --quiet "$evidence" "$SHA" -- stacks/; then
+              echo "::error::${SHA} differs from ${evidence} under stacks/, but only ${evidence} has a gate run. The --first-parent walk that picked it is therefore wrong for this history, and accepting its verdict would be evidence about different code. Refusing."
+              exit 1
+            fi
+            echo "::notice::${SHA} touches no stack, so its gate evidence is ${evidence}, the nearest first-parent commit that does. Verified identical under stacks/."
+          fi
+          echo "sha=${evidence}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the stacks-ci gate to conclude
+        id: poll
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.evidence.outputs.sha }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 1800 ))
+          run_id=""
+
+          while :; do
+            if [ -z "$run_id" ]; then
+              run_id="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/stacks-ci.yml/runs?head_sha=${SHA}" \
+                --jq '[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty' || true)"
+            fi
+
+            if [ -n "$run_id" ]; then
+              # The gate JOB, not the run's overall conclusion: validate-sif is
+              # continue-on-error, so a run can conclude success while the
+              # aggregating gate job is what actually decides.
+              row="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
+                --jq '[.jobs[] | select(.name == "stacks-ci gate")] | last // {}
+                      | [(.status // ""), (.conclusion // "")] | @tsv' || true)"
+              status="$(printf '%s' "$row" | cut -f1)"
+              conclusion="$(printf '%s' "$row" | cut -f2)"
+
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" != "success" ]; then
+                  echo "::error::stacks-ci gate concluded '${conclusion}' on ${SHA} (run ${run_id}). A build tag is evidence the gate passed, so no tag will be created."
+                  exit 1
+                fi
+                echo "run_id=${run_id}"         >> "$GITHUB_OUTPUT"
+                echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
+                echo "::notice::stacks-ci gate passed on ${SHA} (run ${run_id})."
+                exit 0
+              fi
+              echo "gate is '${status:-queued}' in run ${run_id}; waiting."
+            else
+              echo "no stacks-ci run for ${SHA} yet; waiting."
+            fi
+
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out after 30 minutes waiting for the stacks-ci gate on ${SHA}. If stacks-ci did not run for this commit, check its path filters cover the files this commit touched."
+              exit 1
+            fi
+            sleep 20
+          done
+
+  artifacts:
+    name: Resolve the three immutable artifact references
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      bff_repository: ${{ steps.bff.outputs.repository }}
+      bff_digest: ${{ steps.bff.outputs.digest }}
+      ui_sha256: ${{ steps.ui.outputs.sha256 }}
+      ui_archive: ${{ steps.ui.outputs.archive }}
+      ui_version_id: ${{ steps.ui.outputs.version_id }}
+      registry_reference: ${{ steps.registry.outputs.reference }}
+      registry_digest: ${{ steps.registry.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # rev-list walks back to the last commit that touched src/, so the
+          # full history is required.
+          fetch-depth: 0
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Nothing is built here. The image this release runs is the one built
+      # from the most recent commit that changed src/ -- which is this commit
+      # when the release rides its own change, and an earlier one when the
+      # release is a UI or Terraform change. Recording that digest is correct
+      # either way: it is the image the release actually runs.
+      - name: Resolve the BFF image digest
+        id: bff
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          repository="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+
+          # WHICH COMMITS CAN POSSIBLY HAVE AN IMAGE.
+          #
+          # Images are built by deploy-apicurio-dev.yml, which runs on pushes to
+          # develop, so every image tag is a commit that EXISTS ON DEVELOP. The
+          # first version of this walked `git rev-list HEAD -- stacks/apicurio/src`,
+          # which is a different set: git's default history simplification
+          # attributes a merge's path changes to the branch side, so it returns
+          # the FEATURE-BRANCH commits that edited src/ -- and those never get
+          # built. The two sets are disjoint whenever a pull request lands as a
+          # merge commit, which made this step fail 100% of the time; it only
+          # looked plausible because a squash merge happens to put the
+          # src-touching commit on develop itself.
+          #
+          # So: the released commit first, then --first-parent, which stays on
+          # develop's own line and therefore yields merge commits rather than
+          # looking inside them.
+          #
+          # HEAD first is also the more truthful answer, not just the one that
+          # resolves. The deploy builds an image for every develop commit, so
+          # HEAD's image is the one a deploy of this release actually runs; the
+          # last src-touching commit's image is byte-different for identical
+          # source (the build is not reproducible), so recording it would name an
+          # artifact that is not what runs.
+          candidates="$(git rev-parse HEAD; git rev-list --first-parent -n 50 HEAD -- stacks/apicurio/src)"
+
+          digest=""
+          found=""
+          for sha in $candidates; do
+            # STDERR IS READ, NOT DISCARDED, and that is the whole point of this
+            # shape. The first version sent it to /dev/null, which made "you are
+            # not allowed to look" indistinguishable from "it is not there" --
+            # so on the first real release attempt, with ecr:DescribeImages
+            # ungranted and the image sitting in the repository, this step
+            # reported every one of 50 commits as missing and told the operator
+            # to build an image that already existed.
+            #
+            # Only ImageNotFoundException is a miss worth continuing past. A
+            # denial, a missing repository, or anything else is a failure of
+            # this step rather than evidence about any commit, so it stops here
+            # and says which.
+            if digest="$(aws ecr describe-images \
+                  --repository-name "$ECR_REPO" \
+                  --image-ids "imageTag=${sha}" \
+                  --query 'imageDetails[0].imageDigest' \
+                  --output text 2>/tmp/ecr-describe.err)"; then
+              if [ -n "$digest" ] && [ "$digest" != "None" ]; then
+                found="$sha"
+                break
+              fi
+            elif grep -q 'ImageNotFoundException' /tmp/ecr-describe.err; then
+              continue
+            else
+              echo "::error::ecr describe-images failed for a reason that is not 'no such image', so whether an image exists is UNKNOWN and this is not something a rebuild fixes. The call and its error follow."
+              echo "  repository: ${ECR_REPO}  tag: ${sha}"
+              sed 's/^/  /' /tmp/ecr-describe.err
+              exit 1
+            fi
+          done
+
+          if [ -z "$found" ]; then
+            echo "::error::No ECR image found for the released commit or for any of the last 50 develop commits that touched stacks/apicurio/src -- every lookup returned ImageNotFoundException, so the repository is reachable and those images are genuinely absent. Run deploy-apicurio-dev.yml with bff_image=build first, then re-run this release. Tags searched:"
+            printf '%s\n' $candidates | sed 's/^/  /'
+            exit 1
+          fi
+
+          echo "repository=${repository}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}"         >> "$GITHUB_OUTPUT"
+          echo "::notice::BFF image ${digest} (built from ${found})"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: stacks/apicurio/ui/package-lock.json
+
+      # No VITE_API_URL and no Terraform read: since the API origin arrives at
+      # runtime in config.json, this build needs neither AWS nor an existing
+      # deployment. That is what makes the bundle one promotable artifact
+      # rather than one per environment.
+      - name: Build, hash and archive the UI bundle
+        id: ui
+        working-directory: stacks/apicurio/ui
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+          sha256="$(../scripts/bundle-hash.sh dist)"
+
+          # config.json is excluded from the archive as well as from the hash:
+          # it is environment state, and a promotion writes the target
+          # environment's own copy.
+          tar --exclude=./config.json -czf "/tmp/${sha256}.tar.gz" -C dist .
+
+          bucket="uif-apicurio-${ENV}-release-artifacts"
+          version_id="$(aws s3api put-object \
+            --bucket "$bucket" \
+            --key "${sha256}.tar.gz" \
+            --body "/tmp/${sha256}.tar.gz" \
+            --query VersionId --output text)"
+
+          echo "sha256=${sha256}"                              >> "$GITHUB_OUTPUT"
+          echo "archive=s3://${bucket}/${sha256}.tar.gz"        >> "$GITHUB_OUTPUT"
+          echo "version_id=${version_id}"                       >> "$GITHUB_OUTPUT"
+          echo "::notice::UI bundle ${sha256} archived to s3://${bucket}/${sha256}.tar.gz"
+
+      - name: Resolve the registry image digest and check for upstream drift
+        id: registry
+        run: |
+          set -euo pipefail
+          reference="$(stacks/apicurio/scripts/read-tfvar.sh "$TFVARS" registry_image)"
+          pinned="$(stacks/apicurio/scripts/read-tfvar.sh "$TFVARS" registry_image_digest)"
+
+          # Re-resolve the tag upstream. A mismatch means whoever publishes
+          # this image repointed the tag after we pinned it -- worth saying
+          # loudly, because the image we tested is then not the image the tag
+          # names. NOT a failure: upstream moving a tag should make a human
+          # decide to bump, not wedge our releases.
+          repo="${reference%:*}"
+          version="${reference##*:}"
+          path="${repo#*/}"
+          live="$(curl -sSI \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://quay.io/v2/${path}/manifests/${version}" \
+            | tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }')"
+
+          if [ -n "$live" ] && [ "$live" != "$pinned" ]; then
+            echo "::warning::${reference} now resolves to ${live} upstream, but this stack is pinned to ${pinned}. The pin is what runs; bump registry_image_digest in ${TFVARS} deliberately if the new image is wanted."
+          fi
+
+          echo "reference=${reference}" >> "$GITHUB_OUTPUT"
+          echo "digest=${pinned}"       >> "$GITHUB_OUTPUT"
+
+  tag:
+    name: Cut the build tag
+    needs: [validate, gate, artifacts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Assemble the release manifest
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          GIT_COMMIT: ${{ github.sha }}
+          GATE_RUN_ID: ${{ needs.gate.outputs.run_id }}
+          GATE_CONCLUSION: ${{ needs.gate.outputs.conclusion }}
+          BFF_REPOSITORY: ${{ needs.artifacts.outputs.bff_repository }}
+          BFF_DIGEST: ${{ needs.artifacts.outputs.bff_digest }}
+          UI_SHA256: ${{ needs.artifacts.outputs.ui_sha256 }}
+          UI_ARCHIVE: ${{ needs.artifacts.outputs.ui_archive }}
+          UI_VERSION_ID: ${{ needs.artifacts.outputs.ui_version_id }}
+          REGISTRY_REFERENCE: ${{ needs.artifacts.outputs.registry_reference }}
+          REGISTRY_DIGEST: ${{ needs.artifacts.outputs.registry_digest }}
+        run: |
+          set -euo pipefail
+          stacks/apicurio/scripts/release-manifest.sh > /tmp/manifest.yaml
+          cat /tmp/manifest.yaml
+
+      - name: Create and push the annotated tag
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Annotated, with the manifest as the message: the tag and its
+          # evidence are then one object, readable offline with
+          # `git show apicurio/vX.Y.Z` and impossible to separate.
+          git tag -a "$TAG" -F /tmp/manifest.yaml
+          git push origin "refs/tags/${TAG}"
+          echo "::notice::Tagged ${TAG}"
+
+      - name: Mirror it to a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # gh, not a third-party release action: only actions, github,
+          # hashicorp, aws-actions, aquasecurity, sonarsource, opentofu and
+          # pearson* pass the enterprise allow-list, and one disallowed uses:
+          # fails the whole workflow at startup with no job logs.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/manifest.yaml \
+            --target "${GITHUB_SHA}"
+          echo "::notice::Release ${TAG} published."

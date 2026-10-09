@@ -1,0 +1,261 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Rds",
+      "Effect": "Allow",
+      "Action": [
+        "rds:CreateDBInstance",
+        "rds:ModifyDBInstance",
+        "rds:DeleteDBInstance",
+        "rds:CreateDBSubnetGroup",
+        "rds:DescribeDBSubnetGroups",
+        "rds:ModifyDBSubnetGroup",
+        "rds:DeleteDBSubnetGroup",
+        "rds:AddTagsToResource",
+        "rds:RemoveTagsFromResource",
+        "rds:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:rds:eu-west-1:283556840805:db:uif-apicurio-dev-*",
+        "arn:aws:rds:eu-west-1:283556840805:subgrp:uif-apicurio-dev-*"
+      ]
+    },
+    {
+      "Sid": "RdsDescribeUnscopable",
+      "Effect": "Allow",
+      "Action": "rds:DescribeDBInstances",
+      "Resource": "*"
+    },
+    {
+      "Sid": "Ecs",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeClusters",
+        "ecs:DeleteCluster",
+        "ecs:CreateService",
+        "ecs:UpdateService",
+        "ecs:DescribeServices",
+        "ecs:DeleteService"
+      ],
+      "Resource": [
+        "arn:aws:ecs:eu-west-1:283556840805:cluster/uif-apicurio-dev-*",
+        "arn:aws:ecs:eu-west-1:283556840805:service/uif-apicurio-dev-*/*"
+      ]
+    },
+    {
+      "Sid": "Ecr",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:DescribeRepositories",
+    "ecr:DescribeImages",
+        "ecr:DeleteRepository",
+        "ecr:PutLifecyclePolicy",
+        "ecr:GetLifecyclePolicy",
+        "ecr:DeleteLifecyclePolicy",
+        "ecr:SetRepositoryPolicy",
+        "ecr:GetRepositoryPolicy",
+        "ecr:PutImageScanningConfiguration",
+        "ecr:PutImageTagMutability",
+        "ecr:TagResource",
+        "ecr:UntagResource",
+        "ecr:ListTagsForResource",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": "arn:aws:ecr:eu-west-1:283556840805:repository/uif-apicurio-dev-*"
+    },
+    {
+      "Sid": "EcrAuthUnscopable",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "RdsKmsRead",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:ListGrants",
+        "kms:RevokeGrant"
+      ],
+      "Resource": [
+        "arn:aws:kms:eu-west-1:283556840805:key/586f7909-a547-4870-aac0-03f2eae2ce72",
+        "arn:aws:kms:eu-west-1:283556840805:key/53b27019-ed92-4ad9-9d7a-fa71b051e1f0"
+      ]
+    },
+    {
+      "Sid": "RdsKmsGrant",
+      "Effect": "Allow",
+      "Action": "kms:CreateGrant",
+      "Resource": [
+        "arn:aws:kms:eu-west-1:283556840805:key/586f7909-a547-4870-aac0-03f2eae2ce72",
+        "arn:aws:kms:eu-west-1:283556840805:key/53b27019-ed92-4ad9-9d7a-fa71b051e1f0"
+      ],
+      "Condition": {
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    },
+    {
+      "Sid": "PassApicurioTaskRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::283556840805:role/uif-apicurio-dev-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "ecs-tasks.amazonaws.com",
+            "lambda.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "UiBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketAcl",
+        "s3:GetBucketPolicy",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketTagging",
+        "s3:PutBucketTagging",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketRequestPayment",
+        "s3:GetBucketLogging",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration",
+        "s3:GetBucketCORS",
+        "s3:GetBucketWebsite",
+        "s3:GetBucketObjectLockConfiguration"
+      ],
+      "Resource": "arn:aws:s3:::uif-apicurio-dev-*"
+    },
+    {
+      "Sid": "UiBucketObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::uif-apicurio-dev-*/*"
+    },
+    {
+      "Sid": "CloudFrontCreateWithTagsUnscopable",
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateDistributionWithTags",
+      "Resource": "*"
+    },
+    {
+      "Sid": "CiSecretContainerNoValueAccess",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:eu-west-1:283556840805:secret:uif/apicurio/dev/auth/*"
+    },
+    {
+      "Sid": "RdsManagedSecretNoValueAccess",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:eu-west-1:283556840805:secret:rds!db-*"
+    },
+    {
+      "Sid": "UiWaf",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:CreateWebACL",
+        "wafv2:GetWebACL",
+        "wafv2:UpdateWebACL",
+        "wafv2:DeleteWebACL",
+        "wafv2:PutLoggingConfiguration",
+        "wafv2:GetLoggingConfiguration",
+        "wafv2:DeleteLoggingConfiguration",
+        "wafv2:CreateIPSet",
+        "wafv2:GetIPSet",
+        "wafv2:UpdateIPSet",
+        "wafv2:DeleteIPSet",
+        "wafv2:TagResource",
+        "wafv2:UntagResource",
+        "wafv2:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:wafv2:us-east-1:283556840805:global/webacl/uif-apicurio-dev-ui/*",
+        "arn:aws:wafv2:us-east-1:283556840805:global/ipset/uif-apicurio-dev-ui-allowed-ips/*"
+      ]
+    },
+    {
+      "Sid": "UiWafPcmSanctionsRead",
+      "Effect": "Allow",
+      "Action": "wafv2:GetRuleGroup",
+      "Resource": "arn:aws:wafv2:us-east-1:283556840805:global/rulegroup/PCMSanctionsRuleGroupCloudFront/*"
+    },
+    {
+      "Sid": "UiWafReferencedRuleGroups",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:CreateWebACL",
+        "wafv2:UpdateWebACL",
+        "wafv2:GetWebACL"
+      ],
+      "Resource": [
+        "arn:aws:wafv2:us-east-1:283556840805:global/managedruleset/*/*",
+        "arn:aws:wafv2:us-east-1:283556840805:global/rulegroup/PCMSanctionsRuleGroupCloudFront/*"
+      ]
+    },
+    {
+      "Sid": "Wafv2ListRuleGroupsUnscopable",
+      "Effect": "Allow",
+      "Action": "wafv2:ListRuleGroups",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ModifyOwnSecurityGroupRules",
+      "Effect": "Allow",
+      "Action": "ec2:ModifySecurityGroupRules",
+      "Resource": "arn:aws:ec2:eu-west-1:283556840805:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": "uif-apicurio"
+        }
+      }
+    },
+    {
+      "Sid": "ModifySgRulesRuleResource",
+      "Effect": "Allow",
+      "Action": "ec2:ModifySecurityGroupRules",
+      "Resource": "arn:aws:ec2:eu-west-1:283556840805:security-group-rule/*"
+    }
+  ]
+}

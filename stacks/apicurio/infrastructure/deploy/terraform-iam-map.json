@@ -1,0 +1,560 @@
+{
+  "_comment": [
+    "Terraform resource/data type -> the IAM actions an apply of it calls, and the",
+    "scope token naming the ARN pattern those actions apply to.",
+    "",
+    "WHY THIS FILE EXISTS. uif-apicurio-dev-deploy.policy.json is a DELTA: its own",
+    "script calls it 'the one IAM change the Apicurio dev deploy needs' and",
+    "'purely additive', because it is attached to the shared",
+    "echo-dev-github-actions role which already carried ec2, elbv2, lambda,",
+    "apigateway, cloudfront, logs and iam permissions from three other policies.",
+    "A per-stack role has no such base, so it needs the complete set -- and the",
+    "complete set has to be derived from what the stack actually creates rather",
+    "than recalled.",
+    "",
+    "HOW STALENESS IS PREVENTED. required-actions.sh reads every resource and data",
+    "block in ../terraform/*.tf and looks each type up here. An UNMAPPED TYPE IS A",
+    "HARD FAILURE, not a skip. So adding a resource to the stack without deciding",
+    "its permissions breaks the generator rather than silently producing a policy",
+    "that cannot apply -- which is the failure mode this file was written after.",
+    "",
+    "Actions cover the whole lifecycle (create, read, update, delete, tag), because",
+    "terraform performs all of them and a plan against existing state reads before",
+    "it writes. Delete is included deliberately: a role that can create but not",
+    "destroy leaves a half-applied stack unrecoverable by the same pipeline.",
+    "",
+    "`scope` is a token resolved by scopes below, not an ARN, so the env and",
+    "account appear in exactly one place."
+  ],
+  "_scopes": {
+    "_comment": "Scope token -> ARN template. {env}, {account}, {region} are substituted. A token whose value is [\"*\"] is unscopable and says why.",
+    "ec2_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "CreateSecurityGroup and every ec2:Describe* take no resource condition that a create-time caller can satisfy -- the group does not exist yet and Describe is list-shaped. Narrowed by the fact that this role can do nothing else in EC2."
+    },
+    "sg_in_vpc": {
+      "arns": [
+        "arn:aws:ec2:{region}:{account}:security-group/*",
+        "arn:aws:ec2:{region}:{account}:security-group-rule/*",
+        "arn:aws:ec2:{region}:{account}:vpc/*"
+      ],
+      "why": "Security groups carry no name at creation, so they cannot be scoped by name; scoped to the account's groups in-region. The stack also adds one rule to an Echo-owned group (ecs.tf), which is why security-group/* rather than a tag condition. THE vpc/* ARN IS NOT OPTIONAL AND IS EASY TO REASON PAST: ec2:CreateSecurityGroup is authorised against the VPC the group is created IN, not against the group, because the group does not exist yet and has no ARN to authorise against. Without it the first apply fails on every security group at once with UnauthorizedOperation naming the VPC -- a resource this stack does not manage, so nothing in the error points back here. uat's first apply failed exactly that way on all six groups."
+    },
+    "elbv2": {
+      "arns": [
+        "arn:aws:elasticloadbalancing:{region}:{account}:loadbalancer/app/uif-apicurio-{env}-*/*",
+        "arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/uif-apicurio-{env}-*/*",
+        "arn:aws:elasticloadbalancing:{region}:{account}:listener/app/uif-apicurio-{env}-*/*/*",
+        "arn:aws:elasticloadbalancing:{region}:{account}:listener-rule/app/uif-apicurio-{env}-*/*/*/*"
+      ],
+      "why": "Name-scopable, so scoped."
+    },
+    "elbv2_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "DescribeLoadBalancers, DescribeTargetGroups, DescribeListeners and DescribeTags take no resource -- the API is list-shaped and refuses a resource ARN."
+    },
+    "ecs": {
+      "arns": [
+        "arn:aws:ecs:{region}:{account}:cluster/uif-apicurio-{env}-*",
+        "arn:aws:ecs:{region}:{account}:service/uif-apicurio-{env}-*/*",
+        "arn:aws:ecs:{region}:{account}:task-definition/uif-apicurio-{env}-*:*"
+      ],
+      "why": "Name-scopable."
+    },
+    "ecs_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "RegisterTaskDefinition takes no resource ARN at all -- the definition does not exist until it returns. DescribeTaskDefinition and DeregisterTaskDefinition likewise support no resource-level permissions: both were denied against every ECS ARN on 2026-09-21, which is how they were found."
+    },
+    "iam_stack_roles": {
+      "arns": [
+        "arn:aws:iam::{account}:role/uif-apicurio-{env}-*"
+      ],
+      "why": "The five task and execution roles this stack owns. Scoped by name, so this grant cannot touch any other role in the account."
+    },
+    "logs": {
+      "arns": [
+        "arn:aws:logs:{region}:{account}:log-group:*uif-apicurio-{env}-*",
+        "arn:aws:logs:{region}:{account}:log-group:*uif-apicurio-{env}-*:*",
+        "arn:aws:logs:us-east-1:{account}:log-group:*uif-apicurio-{env}-*",
+        "arn:aws:logs:us-east-1:{account}:log-group:*uif-apicurio-{env}-*:*"
+      ],
+      "why": "SCOPED BY STACK-AND-ENV NAME, NOT BY PREFIX, and the change was forced rather than chosen. Four services write log groups here under four different prefixes -- /ecs/ per 00-core.md's delimiter table, /aws/lambda/ for the authorizer, /aws/apigateway/ for the HTTP API's access logs, and aws-waf-logs- which WAF requires literally. Enumerating all four in both regions took ten ARNs and pushed the derived base policy to 6324 characters, over IAM's 6144 limit, so the policy could not be applied at all. Collapsing to a leading-wildcard name match gives four ARNs and the same real boundary: the naming convention guarantees only this stack in this environment holds the uif-apicurio-{env}- token, which is what actually confines the grant -- the prefix was never the thing doing the work. It is also more robust, since a fifth service writing under a new prefix no longer breaks an apply. THE us-east-1 ENTRIES ARE NOT REDUNDANT: a WAF attached to a CloudFront distribution is a global CLOUDFRONT-scope ACL, so its log group lives in us-east-1 however the rest of the stack is deployed, and {region} only ever renders eu-west-1 here. uat's first apply failed on exactly that pair -- /aws/apigateway/ unlisted, and aws-waf-logs- listed but in the wrong region."
+    },
+    "logs_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "DescribeLogGroups is list-shaped and takes no resource."
+    },
+    "lambda": {
+      "arns": [
+        "arn:aws:lambda:{region}:{account}:function:uif-apicurio-{env}-*"
+      ],
+      "why": "Name-scopable."
+    },
+    "apigateway": {
+      "arns": [
+        "arn:aws:apigateway:{region}::/apis",
+        "arn:aws:apigateway:{region}::/apis/*",
+        "arn:aws:apigateway:{region}::/tags/*",
+        "arn:aws:apigateway:{region}::/vpclinks",
+        "arn:aws:apigateway:{region}::/vpclinks/*"
+      ],
+      "why": "API Gateway authorizes by HTTP verb against a control-plane path, not by a named resource, and an api id is not known before creation. /apis (no trailing wildcard) is the collection POST creates into and is a distinct ARN from /apis/*."
+    },
+    "cloudfront": {
+      "arns": [
+        "*"
+      ],
+      "why": "CreateDistribution and CreateOriginAccessControl take no resource ARN; distribution ARNs are not predictable before creation. The dev delta already carries CloudFrontCreateWithTagsUnscopable for the same reason."
+    },
+    "secretsmanager": {
+      "arns": [
+        "arn:aws:secretsmanager:{region}:{account}:secret:uif/apicurio/{env}/*"
+      ],
+      "why": "The slash-delimited form identity-secrets.md mandates; the stack owns only the CI authorizer secret at uif/apicurio/{env}/auth/ci. Keeper matches vault records to AWS secrets by name, which is why the shape matters beyond tidiness."
+    },
+    "sts_self": {
+      "arns": [
+        "*"
+      ],
+      "why": "sts:GetCallerIdentity is unconditionally self-scoped and takes no resource."
+    }
+  },
+  "resources": {
+    "aws_security_group": {
+      "scope": "sg_in_vpc",
+      "extra_scope": "ec2_unscopable",
+      "actions": [
+        "ec2:CreateSecurityGroup",
+        "ec2:DeleteSecurityGroup",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "unscopable_actions": [
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeTags",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeSubnets"
+      ]
+    },
+    "aws_vpc_security_group_ingress_rule": {
+      "scope": "sg_in_vpc",
+      "extra_scope": "ec2_unscopable",
+      "actions": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "unscopable_actions": [
+        "ec2:DescribeSecurityGroupRules"
+      ]
+    },
+    "aws_vpc_security_group_egress_rule": {
+      "scope": "sg_in_vpc",
+      "extra_scope": "ec2_unscopable",
+      "actions": [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "unscopable_actions": [
+        "ec2:DescribeSecurityGroupRules"
+      ]
+    },
+    "aws_lb": {
+      "scope": "elbv2",
+      "extra_scope": "elbv2_unscopable",
+      "actions": [
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:SetSecurityGroups",
+        "elasticloadbalancing:SetSubnets",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "unscopable_actions": [
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeTags"
+      ]
+    },
+    "aws_lb_target_group": {
+      "scope": "elbv2",
+      "extra_scope": "elbv2_unscopable",
+      "actions": [
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "unscopable_actions": [
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetHealth"
+      ]
+    },
+    "aws_lb_listener": {
+      "scope": "elbv2",
+      "extra_scope": "elbv2_unscopable",
+      "actions": [
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyListenerAttributes",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "unscopable_actions": [
+        "elasticloadbalancing:DescribeListenerAttributes",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeRules"
+      ],
+      "why": "DescribeListenerAttributes and ModifyListenerAttributes are both POST-CREATE steps -- the provider creates the listener, then reads its attributes back -- so a create succeeds and the refresh 403s. They are NOT in the same list, and that split is the point: ModifyListenerAttributes supports resource-level permissions and is scoped to this stack's listeners, while DescribeListenerAttributes supports none and must sit on \"*\". Proven rather than assumed: against the identical real listener ARN, simulate-principal-policy returns allowed for Modify and implicitDeny WITH NO MATCHED STATEMENTS for Describe -- IAM never matches the action to a resource-scoped statement at all. Same failure shape as ecs:DeregisterTaskDefinition in ecs_unscopable. Scoping such an action looks tighter and grants nothing."
+    },
+    "aws_ecs_cluster": {
+      "scope": "ecs",
+      "extra_scope": "ecs_unscopable",
+      "actions": [
+        "ecs:CreateCluster",
+        "ecs:DeleteCluster",
+        "ecs:DescribeClusters",
+        "ecs:PutClusterCapacityProviders",
+        "ecs:TagResource",
+        "ecs:UntagResource",
+        "ecs:ListTagsForResource"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_ecs_task_definition": {
+      "scope": "ecs",
+      "extra_scope": "ecs_unscopable",
+      "actions": [
+        "ecs:TagResource",
+        "ecs:UntagResource",
+        "ecs:ListTagsForResource"
+      ],
+      "unscopable_actions": [
+        "ecs:DeregisterTaskDefinition",
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition"
+      ]
+    },
+    "aws_ecs_service": {
+      "scope": "ecs",
+      "extra_scope": "ecs_unscopable",
+      "actions": [
+        "ecs:CreateService",
+        "ecs:DeleteService",
+        "ecs:UpdateService",
+        "ecs:DescribeServices",
+        "ecs:TagResource",
+        "ecs:UntagResource",
+        "ecs:ListTagsForResource"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_iam_role": {
+      "scope": "iam_stack_roles",
+      "actions": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRoleTags",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:ListInstanceProfilesForRole"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_iam_role_policy": {
+      "scope": "iam_stack_roles",
+      "actions": [
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_iam_role_policy_attachment": {
+      "scope": "iam_stack_roles",
+      "actions": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_cloudwatch_log_group": {
+      "scope": "logs",
+      "extra_scope": "logs_unscopable",
+      "actions": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource",
+        "logs:TagLogGroup",
+        "logs:ListTagsLogGroup",
+        "logs:PutSubscriptionFilter",
+        "logs:DescribeLogStreams"
+      ],
+      "unscopable_actions": [
+        "logs:DescribeLogGroups"
+      ]
+    },
+    "aws_lambda_function": {
+      "scope": "lambda",
+      "actions": [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetPolicy",
+        "lambda:ListTags",
+        "lambda:ListVersionsByFunction",
+        "lambda:PutFunctionConcurrency",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
+      ],
+      "unscopable_actions": [],
+      "why": "ListVersionsByFunction is a POST-CREATE read: the provider resolves the function's latest version after creating it. Without it CreateFunction succeeds and the read-back 403s."
+    },
+    "aws_lambda_permission": {
+      "scope": "lambda",
+      "actions": [
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_api": {
+      "scope": "apigateway",
+      "actions": [
+        "apigateway:DELETE",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:POST",
+        "apigateway:PUT",
+        "apigateway:TagResource",
+        "apigateway:UntagResource"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_stage": {
+      "scope": "apigateway",
+      "actions": [
+        "apigateway:DELETE",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:POST",
+        "apigateway:TagResource",
+        "apigateway:UntagResource"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_route": {
+      "scope": "apigateway",
+      "actions": [
+        "apigateway:POST",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:DELETE"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_integration": {
+      "scope": "apigateway",
+      "actions": [
+        "apigateway:POST",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:DELETE"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_authorizer": {
+      "scope": "apigateway",
+      "actions": [
+        "apigateway:POST",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:DELETE"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_vpc_link": {
+      "scope": "apigateway",
+      "actions": [
+        "apigateway:DELETE",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:POST",
+        "apigateway:TagResource",
+        "apigateway:UntagResource"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_cloudfront_distribution": {
+      "scope": "cloudfront",
+      "actions": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:DeleteDistribution",
+        "cloudfront:TagResource",
+        "cloudfront:UntagResource",
+        "cloudfront:ListTagsForResource",
+        "cloudfront:CreateInvalidation"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_cloudfront_origin_access_control": {
+      "scope": "cloudfront",
+      "actions": [
+        "cloudfront:CreateOriginAccessControl",
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:GetOriginAccessControlConfig",
+        "cloudfront:UpdateOriginAccessControl",
+        "cloudfront:DeleteOriginAccessControl",
+        "cloudfront:ListOriginAccessControls"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_secretsmanager_secret": {
+      "scope": "secretsmanager",
+      "actions": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:PutSecretValue"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_ssm_parameter": {
+      "scope": "_skip",
+      "why_skip": "count = 0 in every environment so far: cdc_tables_ssm_parameter is empty because the Delivery Lab arm is half-built and the cdc-poller source is not in this repo. Granting ssm here would be a permission for something that does not exist. If that variable is ever set, this entry must gain real actions and the generator will not remind you -- so it is written as an explicit skip rather than omitted.",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_s3_bucket": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_s3_bucket_versioning": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_s3_bucket_server_side_encryption_configuration": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_s3_bucket_public_access_block": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_s3_bucket_policy": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_ecr_repository": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_ecr_lifecycle_policy": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_db_instance": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_db_subnet_group": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_wafv2_web_acl": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_wafv2_ip_set": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_wafv2_web_acl_logging_configuration": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    }
+  },
+  "data": {
+    "aws_caller_identity": {
+      "scope": "sts_self",
+      "actions": [
+        "sts:GetCallerIdentity"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_vpc": {
+      "scope": "ec2_unscopable",
+      "actions": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeVpcAttribute"
+      ],
+      "unscopable_actions": [],
+      "why": "DescribeVpcAttribute is not optional and is easy to miss: the aws_vpc data source populates enable_dns_hostnames and enable_dns_support, and the provider reads each with a separate DescribeVpcAttribute call. DescribeVpcs alone returns the VPC but not those attributes, so a plan gets far enough to render most of the diff and then fails on the data source it started from. uat's third plan attempt died exactly there."
+    },
+    "aws_wafv2_rule_group": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_iam_policy_document": {
+      "scope": "_local",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "archive_file": {
+      "scope": "_local",
+      "actions": [],
+      "unscopable_actions": []
+    }
+  }
+}

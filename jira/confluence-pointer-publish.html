@@ -1,0 +1,154 @@
+<p><strong>Rule:</strong> If this page and GitHub disagree, <strong>GitHub wins</strong>. Reconcile using
+<a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/capabilities/docs/capability-domain-jira-map.md">capability-domain-jira-map.md</a>.</p>
+
+<div data-type="panel-info">
+<h2>What this page is</h2>
+<table>
+<thead><tr><th>System</th><th>Role</th><th>Source of truth</th></tr></thead>
+<tbody>
+<tr>
+<td><strong>GitHub</strong></td>
+<td>Code, standards, CI/CD definitions</td>
+<td><a href="https://github.com/pearson-dnt-coe/universal-Integration-framework">universal-Integration-framework</a></td>
+</tr>
+<tr>
+<td><strong>Jira (UIFPE)</strong></td>
+<td>Work, traceability, workflow</td>
+<td><a href="https://pearson.atlassian.net/jira/software/projects/UIFPE">UIFPE project</a></td>
+</tr>
+<tr>
+<td><strong>Confluence</strong></td>
+<td>Links and cheat-sheets only</td>
+<td><a href="https://pearson.atlassian.net/wiki/spaces/UIF/overview">UIF space</a> — updated when repo or Jira model changes</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>Why two axes?</strong> See GitHub <a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/jira/uif-faq.md#why-two-axes-t-shaped-at-all">jira/uif-faq.md § Why two axes (T-shaped)</a>.</p>
+
+<h2>Start here (by role)</h2>
+<table>
+<thead><tr><th>Role</th><th>Read first (in GitHub)</th></tr></thead>
+<tbody>
+<tr><td><strong>FDE (developer)</strong></td><td><code>README.md</code> → <code>delivery-lab/blueprints/api-playbook.md</code> → <code>domains/&lt;domain&gt;/DOMAIN-CHECKLIST.md</code></td></tr>
+<tr><td><strong>PM</strong></td><td><code>jira/jira-workflow.md</code> → <code>jira/backlog-seed.md</code> → <code>PLANNING.md</code></td></tr>
+<tr><td><strong>QE</strong></td><td>Domain <code>qe/</code> + <code>capabilities/observability/</code></td></tr>
+<tr><td><strong>Everyone — Jira ↔ Git</strong></td><td><code>capabilities/delivery/jira-github-integration.md</code></td></tr>
+</tbody>
+</table>
+
+<h2>One rule (Jira + GitHub must match)</h2>
+<p><strong>Parent = Domain epic. Capability = label. Never two parents.</strong></p>
+<table>
+<thead><tr><th>Question</th><th>Answer</th></tr></thead>
+<tbody>
+<tr><td>Where does code go?</td><td><code>domains/&lt;domain&gt;/src/</code> — never <code>modules/</code>, never <code>capabilities/</code></td></tr>
+<tr><td>Which Jira parent for delivery work?</td><td><strong>Domain epic</strong> (e.g. Domain: Product — <strong>UIFPE-51</strong>)</td></tr>
+<tr><td>How do I tag capability standards?</td><td>Labels: <code>capability:api</code>, <code>capability:schema</code>, etc.</td></tr>
+<tr><td>When is Foundation Epic the parent?</td><td><strong>Pre-domain platform work only</strong> (registry stand-up, CI template, CD skeleton)</td></tr>
+</tbody>
+</table>
+<p>Worked example (product API): parent <strong>UIFPE-51</strong>, labels <code>domain:product</code> + <code>capability:api</code>, code in <code>domains/product/src/api/</code>.</p>
+<p>Full diagram: <a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/capabilities/docs/capability-domain-jira-map.md">capability-domain-jira-map.md</a></p>
+
+<h2>Domain epics (live in UIFPE)</h2>
+<table>
+<thead><tr><th>Domain</th><th>Label</th><th>GitHub path</th><th>Jira key</th></tr></thead>
+<tbody>
+<tr><td>Product</td><td><code>domain:product</code></td><td><code>domains/product/</code></td><td><strong>UIFPE-51</strong></td></tr>
+<tr><td>Customer</td><td><code>domain:customer</code></td><td><code>domains/customer/</code></td><td><strong>UIFPE-52</strong></td></tr>
+<tr><td>SKU</td><td><code>domain:sku</code></td><td><code>domains/sku/</code></td><td><strong>UIFPE-53</strong></td></tr>
+<tr><td>Finance</td><td><code>domain:finance</code></td><td><code>domains/finance/</code></td><td><strong>UIFPE-54</strong></td></tr>
+<tr><td>HR</td><td><code>domain:hr</code></td><td><code>domains/hr/</code></td><td><strong>UIFPE-55</strong></td></tr>
+<tr><td>Legal</td><td><code>domain:legal</code></td><td><code>domains/legal/</code></td><td><strong>UIFPE-56</strong></td></tr>
+<tr><td>Identity</td><td><code>domain:identity</code></td><td><code>domains/identity/</code></td><td><strong>UIFPE-57</strong></td></tr>
+<tr><td>Orders</td><td><code>domain:orders</code></td><td><code>domains/orders/</code></td><td><strong>UIFPE-109</strong></td></tr>
+<tr><td>Tax</td><td><code>domain:tax</code></td><td><code>domains/tax/</code></td><td><strong>UIFPE-110</strong></td></tr>
+<tr><td>Subscriptions</td><td><code>domain:subscriptions</code></td><td><code>domains/subscriptions/</code></td><td><strong>UIFPE-111</strong></td></tr>
+</tbody>
+</table>
+
+<h2>Git ↔ Jira daily loop (FDE)</h2>
+<h3>Branch and PR naming</h3>
+<pre><code>feature/UIFPE-&lt;n&gt;-&lt;short-description&gt;</code></pre>
+<p>Example: <code>feature/UIFPE-39-product-data-api</code>. PR title: <code>UIFPE-39 · Product Data API</code></p>
+
+<h3>Smart Commits (primary — use this)</h3>
+<pre><code>UIFPE-&lt;n&gt; #comment &lt;what you did and why&gt; #&lt;transition&gt;</code></pre>
+<table>
+<thead><tr><th>Moment</th><th>Example commit message</th><th>Jira result</th></tr></thead>
+<tbody>
+<tr><td>Start work</td><td><code>UIFPE-39 #comment Starting API handler #in-progress</code></td><td>Comment + → In Progress</td></tr>
+<tr><td>PR ready</td><td><code>UIFPE-39 #comment PR opened for review #code-review</code></td><td>Comment + → Code Review</td></tr>
+<tr><td>Merged</td><td><code>UIFPE-39 #comment Merged to main #ready-for-qa</code></td><td>Comment + → Ready for QA</td></tr>
+<tr><td>Blocked</td><td><code>UIFPE-39 #comment Waiting on registry access #blocked</code></td><td>Comment + → Blocked</td></tr>
+</tbody>
+</table>
+<p>Full details: <a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/capabilities/delivery/jira-github-integration.md">jira-github-integration.md</a></p>
+
+<h3>GitHub Actions auto-transition (Phase 2 — admin-owned; do not rely on yet)</h3>
+<p><strong>Engineers:</strong> Smart Commits only. <strong>Atlassian admin:</strong> resolve runner <strong>401</strong> (IP allowlist) for <code>jira-transition.yml</code> backup.</p>
+
+<h2>What happens on a PR (GitHub)</h2>
+<table>
+<thead><tr><th>Step</th><th>What runs</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Jira key from branch name → status update (Smart Commits / workflow)</td></tr>
+<tr><td>2</td><td>PR touches <code>domains/&lt;domain&gt;/**</code> → Domain CI (<code>domain-ci.yml</code>)</td></tr>
+<tr><td>3</td><td>Structural gates: checklist, schemas, Dockerfile, qe/</td></tr>
+<tr><td>4</td><td>When API/Helm exist: Entra ID + Keeper gate</td></tr>
+</tbody>
+</table>
+<p>Pilot domain: <strong>domains/product/</strong> (Product Data API).</p>
+
+<h2>Sprint 0 pointers (live backlog)</h2>
+<table>
+<thead><tr><th>Story</th><th>Parent type</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>UIFPE-36</td><td>Foundation Epic</td><td>Schema registry (Apicurio)</td></tr>
+<tr><td>UIFPE-37</td><td>Foundation Epic</td><td>CI template</td></tr>
+<tr><td>UIFPE-38</td><td>Foundation Epic</td><td>CD skeleton (Jenkins)</td></tr>
+<tr><td><strong>UIFPE-39</strong></td><td><strong>Domain: Product (UIFPE-51)</strong></td><td><code>domains/product/src/api/</code></td></tr>
+<tr><td><strong>UIFPE-40</strong></td><td><strong>Domain: Product (UIFPE-51)</strong></td><td><code>domains/product/src/mcp/</code></td></tr>
+<tr><td>UIFPE-41</td><td>Program / Architecture</td><td>API playbook (delivered)</td></tr>
+</tbody>
+</table>
+<p>Details: <a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/jira/backlog-seed.md">backlog-seed.md</a></p>
+
+<h2>Jira Automation (required — one-time admin setup)</h2>
+<p>Smart Commits and branch/PR workflow move UIFPE issues through statuses, but <strong>a status change alone does not notify anyone</strong>. A Jira project admin must configure these automation rules once in <strong>UIFPE → Project settings → Automation</strong>:</p>
+<table>
+<thead><tr><th>When issue transitions to</th><th>Action (required)</th></tr></thead>
+<tbody>
+<tr><td><strong>Code Review</strong></td><td>Assign to and/or comment-mention the PR reviewer(s) — turns “PR ready” into an actual notification</td></tr>
+<tr><td><strong>Ready for QA</strong></td><td>Assign to and/or comment-mention the domain’s QE Lead — turns “merged / ready for test” into an actual notification</td></tr>
+</tbody>
+</table>
+<p>Without these rules, reviewers and QE must poll the board; the Git ↔ Jira integration is incomplete. Full context: <a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/capabilities/delivery/jira-github-integration.md#notifying-qe-and-reviewers-at-each-hand-off">Notifying QE and reviewers</a> in <code>jira-github-integration.md</code>.</p>
+
+<h2>What this page deliberately omits</h2>
+<p>Capability standards, playbooks, runbooks, and full DoD checklists live in <strong>GitHub</strong> — not duplicated here.</p>
+
+<div data-type="panel-warning">
+<h2>Legacy — do not use</h2>
+<table>
+<thead><tr><th>Do not</th><th>Use instead</th></tr></thead>
+<tbody>
+<tr><td>Parent delivery stories under Foundation Epic</td><td>Parent = <strong>Domain epic</strong></td></tr>
+<tr><td>Paths under <code>modules/</code></td><td><code>domains/&lt;domain&gt;/src/</code></td></tr>
+<tr><td>Label <code>capability:schema-registry</code></td><td><code>capability:schema</code></td></tr>
+<tr><td>Parent new delivery work to UIFPE-8</td><td>Domain epic + labels</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>Maintenance</h2>
+<p><strong>Last updated:</strong> 2026-08-05 · <strong>Aligned to:</strong> GitHub <code>validate</code> · <strong>Source draft:</strong> <a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/jira/confluence-pointer-draft.md">confluence-pointer-draft.md</a></p>
+<ul>
+<li><a href="https://pearson.atlassian.net/wiki/spaces/UIF/overview">UIF Confluence space</a></li>
+<li><a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/README.md">README</a></li>
+<li><a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/capabilities/delivery/jira-github-integration.md">Jira ↔ GitHub integration</a></li>
+<li><a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/capabilities/docs/capability-domain-jira-map.md">Capability × Domain map</a></li>
+<li><a href="https://github.com/pearson-dnt-coe/universal-Integration-framework/blob/validate/jira/backlog-seed.md">Backlog seed</a></li>
+</ul>

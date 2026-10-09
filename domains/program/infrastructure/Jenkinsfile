@@ -1,0 +1,11 @@
+// CD pipeline for this domain: promote the container image Dev → QA → Stage → Prod.
+// Fill in the stages; the platform standard lives in ../../../capabilities/delivery/.
+pipeline {
+  agent any
+  stages {
+    stage('Deploy Dev')   { steps { echo 'deploy to dev' } }
+    stage('QA')           { steps { echo 'promote to qa' } }
+    stage('Stage')        { steps { echo 'promote to stage' } }
+    stage('Prod')         { steps { echo 'promote to prod' } }
+  }
+}

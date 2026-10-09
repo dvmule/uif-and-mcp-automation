@@ -1,0 +1,27 @@
+# Test dependencies for stacks/echo/qe/gold.
+#
+# This file exists so the gold suite's dependencies are DECLARED BY THE STACK
+# that owns the suite, which is what lets stacks-ci install them without the
+# workflow needing to know anything about echo (UIFPE-469). Before it, the only
+# place these were installed was deploy-echo-gold-dev.yml, post-merge.
+#
+# It is an INCLUDE, not a copy. The pins genuinely live in the product domain
+# because the gold suite tests the shared gold runtime against product's
+# artifacts, and duplicating a pinned list here would drift the moment either
+# side moved - the same trap as a hand-copied alias list. One source of truth,
+# and the cross-stack reach is stated out loud rather than buried in a
+# workflow step.
+#
+# If that reach is ever considered wrong, the fix is to move the shared pins
+# somewhere both can own - not to paste them into this file.
+#
+# KNOWN COUPLING, worth stating because nothing enforces it: stacks-ci's `detect`
+# job filters by path, and domains/product/** is not one of stacks/echo's paths.
+# So a pin change on the other side of this include can break `ci (echo)` on a
+# pull request that never triggers the echo leg — the breakage surfaces on the
+# NEXT change to stacks/echo instead, attributed to the wrong commit. Two tests
+# in the gold suite are already guarded by `pytest.importorskip` on sqlglot and
+# jsonschema (test_compile_intake_delta.py), so a pin that stops supplying
+# either degrades them to a silent skip rather than a failure — the -rs lines in
+# qe/ci.sh's output are what make that visible.
+-r ../../../../domains/product/qe/requirements-dev.txt

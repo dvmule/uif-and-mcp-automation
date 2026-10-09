@@ -1,0 +1,13 @@
+# Test-only dependencies for the control panel API. The runtime deps the
+# tests import THROUGH the app (fastapi, sqlglot, pyyaml, boto3) live in
+# stacks/beacon/src/requirements.txt — install that FIRST or collection
+# fails with ModuleNotFoundError. httpx backs FastAPI's TestClient.
+pytest==9.0.3
+httpx==0.28.1
+# UIFPE-226: the Lambda entrypoint test drives the app through the Mangum
+# adapter with a real API Gateway v2 event
+mangum==0.19.0
+# converter.py and the engine's config_validator import sqlglot; the deploy
+# workflow's test gate installs this file before running ALL of qe/, so the
+# pin lives here. Kept IDENTICAL to src/requirements.txt — move them together.
+sqlglot==30.15.0

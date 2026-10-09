@@ -1,0 +1,113 @@
+name: Domain registry — docs must match domains/
+
+# The documented domain list has drifted from reality TWICE:
+#   * `assessment` was renamed to `sku` and jira/agentic-engineering-model.md
+#     still named `assessment` afterwards;
+#   * `program` was registered (UIFPE-118), then silently dropped again when a
+#     branch that had already merged develop resolved the line in its own favour
+#     (UIFPE-155). Git showed no conflict, so review saw nothing.
+# The second one is the instructive case: a clean merge is not evidence that
+# nothing was reverted. Only a check that reads BOTH the docs and the directory
+# catches it.
+#
+# CLAUDE.md is the file every engineer and every AI agent reads first (AGENTS.md
+# has agents read it to establish session bounds), so a domain missing from it is
+# a domain the next contributor treats as unsanctioned drift — and a domain
+# listed but absent is a promise the repo cannot keep.
+#
+# Triggers on BOTH the directory and the documents, because either side can
+# drift: adding domains/<new>/ without documenting it, or editing a list without
+# the directory. A workflow scoped to only one of them would miss half the cases.
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "domains/**"
+      - "CLAUDE.md"
+      - "README.md"
+      - "jira/agentic-engineering-model.md"
+      - ".github/workflows/domain-registry.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "domains/**"
+      - "CLAUDE.md"
+      - "README.md"
+      - "jira/agentic-engineering-model.md"
+      - ".github/workflows/domain-registry.yml"
+
+jobs:
+  registry:
+    name: Documented domains match domains/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare every documented list against the directory
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          from pathlib import Path
+
+          actual = sorted(d for d in os.listdir("domains")
+                          if (Path("domains") / d).is_dir())
+
+          # Each file states the list once, in prose, after the same phrase. The
+          # regex is anchored on that phrase rather than on a bare backticked
+          # word, so an unrelated `product` elsewhere in the file cannot satisfy
+          # or break the check.
+          DOCS = ["CLAUDE.md", "README.md", "jira/agentic-engineering-model.md"]
+          PHRASE = r"deployable, ownable business units[:\s(]+((?:`[a-z-]+`(?:, )?)+)"
+
+          rc = 0
+          for doc in DOCS:
+              text = Path(doc).read_text(encoding="utf-8")
+              m = re.search(PHRASE, text)
+              if not m:
+                  print(f"[FAIL] {doc}: no domain list found. The check anchors on "
+                        f"'deployable, ownable business units' — if the wording "
+                        f"changed, update this workflow rather than dropping the list.")
+                  rc = 1
+                  continue
+              listed = sorted(re.findall(r"`([a-z-]+)`", m.group(1)))
+              # Compared as SETS: the docs order product first for readability,
+              # which is deliberate and not something to enforce.
+              missing = [d for d in actual if d not in listed]
+              extra = [d for d in listed if d not in actual]
+              if missing or extra:
+                  rc = 1
+                  print(f"[FAIL] {doc}")
+                  if missing:
+                      print(f"         on disk but NOT documented: {missing}")
+                  if extra:
+                      print(f"         documented but NOT on disk: {extra}")
+              else:
+                  print(f"[OK]   {doc}: {len(listed)} domains, matches domains/")
+
+          # The written-out count must agree too — "the seven domains" while
+          # listing ten is exactly the state UIFPE-155 found.
+          WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+                   7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven",
+                   12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen",
+                   16: "sixteen", 17: "seventeen", 18: "eighteen",
+                   19: "nineteen", 20: "twenty"}
+          expected = WORDS.get(len(actual))
+          claude = Path("CLAUDE.md").read_text(encoding="utf-8")
+          m = re.search(r"the ([a-z]+) domains, the top-level folders", claude)
+          if not m:
+              print("[FAIL] CLAUDE.md: the settled-domains count sentence is missing")
+              rc = 1
+          elif m.group(1) != expected:
+              print(f"[FAIL] CLAUDE.md says 'the {m.group(1)} domains' but there "
+                    f"are {len(actual)} ({expected})")
+              rc = 1
+          else:
+              print(f"[OK]   CLAUDE.md count: 'the {expected} domains'")
+
+          if rc:
+              print(f"\ndomains/ contains {len(actual)}: {actual}")
+              print("Fix the documents, or remove the scaffold — a domain with no "
+                    "work behind it should not be on develop at all.")
+          sys.exit(rc)
+          PY

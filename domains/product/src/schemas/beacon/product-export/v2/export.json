@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "job_id": "product-export",
+  "mapping_config_s3_path": "s3://eds-dev-beacon-product/configs/product-export/v2/mapping.json",
+  "canonical_s3_prefix": "s3://eds-dev-beacon-product/staging/product-export/{batch_id}/canonical/",
+  "quality_gates": {
+    "min_rows": 1,
+    "max_rejection_pct": 2.0,
+    "row_count_delta_pct_warn": 40
+  },
+  "extraction": {
+    "mode": "full"
+  },
+  "renderings": [
+    {
+      "format": "csv",
+      "options": {
+        "delimiter": ",",
+        "header": true,
+        "quote_all": true,
+        "encoding": "UTF-8",
+        "formula_escape": true
+      }
+    }
+  ],
+  "packaging": {
+    "filename_pattern": "product_export_{yyyyMMdd}_{batch_id}.{ext}",
+    "single_file": true,
+    "pickup_s3_prefix": "s3://eds-dev-beacon-product/pickup/product-export/{batch_id}/",
+    "manifest": {
+      "enabled": true,
+      "checksum": "sha256"
+    }
+  },
+  "delivery": {
+    "channel": "sftp",
+    "adapter": "paramiko",
+    "secret_ref": "eds/dev/beacon/product-export/sftp",
+    "remote_dir": "/inbound/product",
+    "upload_pattern": "tmp-then-rename"
+  }
+}

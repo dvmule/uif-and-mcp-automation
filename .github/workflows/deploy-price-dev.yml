@@ -1,0 +1,105 @@
+name: Deploy price — Dev
+
+# Price's dev deploy — a REDUCED copy of deploy-program-dev.yml, which is
+# itself the reduced pattern for every non-product gold domain (UIFPE-122,
+# capabilities/data/gold-control-plane.md §2–3). See the tail of program's
+# workflow for what a non-product domain deliberately does NOT do (no
+# terraform, no Glue script upload, no UI build, no registry publish) — all
+# of it applies to price unchanged.
+#
+# Price's artifacts are COMPILED, not hand-authored: the UIFPE-262 scaffolder
+# generated them from the wizard intake (UIFPE-263), and the intake-compile
+# workflow regenerates them whenever the intake changes.
+#
+# Branch → environment contract (ADR-0004): develop → dev. UAT and PROD are
+# deliberately absent until their §CP-5 cutovers run.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "domains/price/**"
+      - ".github/workflows/deploy-price-dev.yml"
+  workflow_dispatch:
+
+# Per-domain concurrency group, same trade-off as program's (sanctioned by the
+# UIFPE-122 steward model because this workflow writes only under price's own
+# entity prefix and its own config item — nothing shared to skew).
+concurrency:
+  group: deploy-price-dev
+  cancel-in-progress: false
+
+jobs:
+  # Per-domain latch, matching program's: the first load arms only when the
+  # repo variable flips, so merging the compiled artifacts is safe by default.
+  latched:
+    name: Deploy price latched off
+    if: github.ref == 'refs/heads/develop' && vars.PRICE_DEPLOY_ENABLED != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notice
+        run: |
+          echo "::notice::Price dev deploy skipped — PRICE_DEPLOY_ENABLED != 'true'. Set the repo variable PRICE_DEPLOY_ENABLED=true once the one-time preconditions are in: Glue database uif_echo_dev_gold_price exists, and the shared glue role can read ALL SEVEN sources uif_echo_dev_silver_tep.{mtl_cross_references_b,qp_list_lines,qp_pricing_attributes,qp_list_headers_b,qp_list_headers_tl,xxpso_qp_vat_price_stg,mtl_system_items_b} and write uif_echo_dev_gold_price + s3://uif-echo-dev-gold/price/*."
+
+  deploy:
+    name: Deploy price to dev
+    if: github.ref == 'refs/heads/develop' && vars.PRICE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install -r domains/product/qe/requirements-dev.txt
+
+      # Test gate BEFORE any credential is assumed: price's domain-local gates,
+      # the shared fail-closed artifact validation, and the ADR-0008
+      # derivation-block gate price is enrolled in (it lives in product's qe,
+      # whose CI does not run on a price-only change), so a drifted manifest or
+      # a hand-added join chain cannot reach S3.
+      - name: Test gate
+        run: |
+          python3 -m pytest domains/price/qe domains/product/qe/test_derivation_blocks.py -q
+          python3 stacks/echo/src/apps/cli/validate_gold_schemas.py --domain price
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: eu-west-1
+
+      # PER-ENTITY --delete, never the shared prefix (UIFPE-117) — the
+      # destination is shared by every gold domain.
+      - name: Sync schema + mapping artifacts
+        run: |
+          for d in domains/price/src/schemas/gold/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/schemas/gold/$entity" --delete
+          done
+          for d in domains/price/src/schemas/mapping/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/mappings/$entity" --delete
+          done
+
+      - name: Sync pipeline configs (config-as-code)
+        run: |
+          # --repo-root scopes the read to this domain's pipelines/base/
+          # (see program's workflow for the UNMANAGED-noise caveat on the
+          # shared config table).
+          python3 stacks/echo/src/apps/cli/sync_pipelines.py \
+            --env "$ENV" --repo-root domains/price/src/apps --apply
+
+      - name: Summary
+        run: |
+          echo "::notice::Price artifacts + pipeline config deployed to $ENV. The Gold table ALREADY EXISTS (1,352,350 rows on the pre-UIFPE-353 grain), so this is an INCREMENTAL run, not a full load, and the CDC worker profile is what applies. The element struct widens 12 -> 15 members: let the incremental run FIRST (it applies the nested ADD COLUMN), because the refresh path refuses a stale struct by design (UIFPE-455). Expect 1,492,904 rows at productId grain (256,524 with an empty array), 12,267,982 elements, max 126 per product, one element per (priceListId, vatCountryCode, fromQuantity). For a clean re-materialisation on the new grain, dispatch --rebuild explicitly."

@@ -1,0 +1,54 @@
+[project]
+name = "pearson-schema-registry-bff"
+# Not the release identity. This package is never published to an index; the
+# capability's version is declared in stacks/apicurio/VERSION and released as
+# the tag apicurio/vX.Y.Z. Two independent 0.1.0s next to a real release
+# identity is the ambiguity the release tag exists to remove.
+version = "0.0.0"
+description = "BFF for the Pearson Schema Registry — Apicurio + CMDB"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "structlog>=24.4.0",
+    # Floor raised from 0.0.12 by the first SCA scan that ever resolved this
+    # project: 0.0.27 carried an Inefficient Algorithmic Complexity HIGH, fixed
+    # in 0.0.30. The floor is what stops a future re-lock dropping back below
+    # the fix; uv.lock currently pins 0.0.32.
+    "python-multipart>=0.0.30",
+    # Same shape as the python-multipart floor above, and found the same way:
+    # by the first SCA scan that resolved this project after src/uv.lock was
+    # resynced. anyio 4.13.0 carries a CRITICAL Improper Validation of
+    # Certificate with Host Mismatch, fixed in 4.14.2. It is transitive
+    # (fastapi -> starlette -> anyio) and Snyk reports it as not upgradable
+    # from the parent, so the floor is declared here -- which is also what
+    # stops a future re-lock dropping back below the fix. The same scan's
+    # idna 3.13 -> 3.15 finding is MEDIUM, below this gate's `high` threshold,
+    # and is not pinned here.
+    "anyio>=4.14.2",
+    "boto3>=1.34",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "respx>=0.21.1",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+# Only `app` is an installable package. Without this, setuptools' flat-layout
+# auto-discovery sees `app` alongside `schemas/` (and `config/`, when present)
+# and refuses to guess, failing `uv sync` with "Multiple top-level packages
+# discovered in a flat-layout". That broke every local install after the
+# ADR-0012 move put those siblings next to `app/`.
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

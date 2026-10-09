@@ -1,0 +1,13 @@
+# Root aggregator — lets a single `spectral lint -r ruleset.yaml <files>`
+# invocation cover a mixed set of contract types by overriding on file glob.
+# CI (../../../../.github/workflows/contract-governance.yml) instead calls
+# each per-type ruleset directly against its own matrix entry, which is
+# clearer in job output; this file is for local ad hoc use across a mixed
+# changeset.
+overrides:
+  - files: ["**/src/api/*.yaml"]
+    extends: openapi.spectral.yaml
+  - files: ["**/src/events/*.yaml"]
+    extends: asyncapi.spectral.yaml
+  - files: ["**/src/mcp/*.yaml"]
+    extends: mcp.spectral.yaml

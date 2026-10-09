@@ -1,0 +1,26 @@
+[
+  {
+    "INVENTORY_ITEM_ID": 1001,
+    "ORGANIZATION_ID": 101,
+    "ATTR_GROUP_ID": 741,
+    "C_EXT_ATTR6": "0451524934",
+    "C_EXT_ATTR8": "9780451524935",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  },
+  {
+    "INVENTORY_ITEM_ID": 1002,
+    "ORGANIZATION_ID": 101,
+    "ATTR_GROUP_ID": 741,
+    "C_EXT_ATTR6": "0061120081",
+    "C_EXT_ATTR8": "9780061120084",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  },
+  {
+    "INVENTORY_ITEM_ID": 1003,
+    "ORGANIZATION_ID": 101,
+    "ATTR_GROUP_ID": 500,
+    "C_EXT_ATTR6": "NOT-AN-ISBN",
+    "C_EXT_ATTR8": "ALSO-NOT-ISBN",
+    "_silver_updated_at": "2025-06-01T12:05:00Z"
+  }
+]

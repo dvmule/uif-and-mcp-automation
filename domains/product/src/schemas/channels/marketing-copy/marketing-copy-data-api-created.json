@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.pearson.com/gold/marketing_copy/api-created/v1/schema.json",
+  "registry": {
+    "group": "product",
+    "artifact": "product.marketing-copy.api-created",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "title": "Marketing copy (api-created)",
+  "description": "The `data` block of a marketing_copy created event as delivered on the api channel (webhook / API destination): the Gold master projected onto attributes whose x-channels includes 'api'. The projection is identical for every operation; the operation is carried by the coordinate so the contracts can version independently.",
+  "metadata": {
+    "domain": "product",
+    "entity": "marketing_copy",
+    "version": "v1",
+    "dataClassification": "internal",
+    "channel": "api",
+    "operation": "created",
+    "transport": "webhook / API destination",
+    "source": "domains/product/src/schemas/gold/marketing_copy/v1/master.json",
+    "audience": "consumer"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contentId"
+  ],
+  "properties": {
+    "contentId": {
+      "type": "string",
+      "description": "Content identifier — the natural key of the library, and the one path segment of the retrieval URL. Live-measured effectively unique at version 'C' (6,561,618 distinct across 6,561,622 rows, 2026-09-03)."
+    },
+    "marketingCopyTypeCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Content type (60 distinct values at version 'C')."
+    },
+    "owningMarketCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Market that owns this copy."
+    },
+    "audienceCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Intended audience of the copy."
+    },
+    "marketingCopyText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Short human-readable description of the copy."
+    },
+    "marketingCopyContentText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The full marketing copy text (max 348,438 chars observed; avg 1,665). Null means nothing is published yet — the retrieval API answers 404 for such rows. Deliberately api-only: content never rides event or message feeds."
+    }
+  },
+  "$comment": "GENERATED from domains/product/src/schemas/gold/marketing_copy/v1/master.json by stacks/echo/src/apps/cli/generate_tier_subsets.py — do not hand-edit; regenerate. A committed copy is transitional: the schema registry is the destination for consumers."
+}

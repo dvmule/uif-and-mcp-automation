@@ -1,0 +1,94 @@
+# Source registry seed data. In the deployed service this is a DynamoDB
+# table maintained through the admin screens; the YAML seed keeps the
+# reference implementation runnable anywhere and documents the record shape.
+# eligible_formats is the D17 curation attribute (an ONIX feed is XML-only
+# by industry standard); sensitivity gates selection by role scope.
+#
+# One image serves every environment, so a source whose physical location
+# differs per environment carries a path_by_env map — resolved against
+# BEACON_ENV at read time (registries.py), with `path` as the fallback for
+# environments not listed (local dev, tests).
+
+- id: gold_product.product
+  domain: product
+  kind: iceberg
+  path: glue_catalog.eds_dev_gold_product.product
+  path_by_env:
+    sandbox: glue_catalog.eds_dev_gold_product.product
+    # echo stack's Gold (surveyed 2026-08-18): Iceberg at s3://uif-echo-dev-gold/product/
+    dev: glue_catalog.uif_echo_dev_gold_product.product
+  owner: Product data team
+  refresh: daily 06:30
+  sensitivity: commercial
+  eligible_formats: [csv, json, xml]
+  # UIFPE-168: platform-owned incremental watermark — the gold CDC
+  # framework's _gold_updated_at moves only on business change (ADR-0003 D7).
+  # Only sources carrying this attribute can publish incremental feeds; add
+  # it to the other gold sources when their tables leave draft.
+  watermark_column: _gold_updated_at
+  columns: [inventory_item_id, organization_id, product_id, isbn13, description, long_description, item_type, line_of_business, discipline_level1, discipline_level2, language_level1, copyright_year]
+
+# Sandbox stand-in for the Gold Product dataset (Gold DB in progress): same
+# columns, CSV in the stack's data bucket — lets an author build and RUN an
+# export end-to-end today. Retire when the Iceberg table lands.
+- id: demo.products_csv
+  domain: product
+  kind: csv
+  path: s3://uif-beacon-sandbox-data/raw/products/
+  owner: Beacon demo
+  refresh: static demo data
+  sensitivity: internal
+  eligible_formats: [csv, json]
+  columns: [inventory_item_id, organization_id, product_id, isbn13, description, long_description, item_type, line_of_business, discipline_level1, discipline_level2, language_level1, copyright_year]
+
+# Price entity — gold_price.price since the 2026-08-17 relocation to the
+# price domain (its own gold database, like gold_program); the old
+# gold_product.price id/path was stale (UIFPE-237). Lifecycle DRAFT: the
+# table does not exist yet, so NO watermark_column — add _gold_updated_at
+# when it leaves draft (see the gold_product.product comment above). Until
+# then this source is full-load-only by construction.
+- id: gold_price.price
+  domain: price
+  kind: iceberg
+  path: glue_catalog.eds_dev_gold_price.price
+  path_by_env:
+    sandbox: glue_catalog.eds_dev_gold_price.price
+    dev: glue_catalog.uif_echo_dev_gold_price.price
+  owner: Enterprise Data Connect
+  refresh: hourly
+  # master.json says dataClassification: internal — loosening from
+  # restricted is an owner call, deliberately not taken here
+  sensitivity: restricted
+  eligible_formats: [csv]
+  # offline fallback for the column picker (live Glue introspection takes
+  # over when the table lands); business columns only, no _-metadata.
+  # priceSpecifications is an ARRAY — CSV feeds must map it via to_json.
+  columns: [product_id, isbn13, price_specifications]
+
+# UIFPE-220: the gold_product.onix_3_0 row was removed — it pointed at an
+# eds_dev_gold_* database that exists in no environment, so picking it 404ed
+# the author. Re-add it with a real path (+ path_by_env) when ONIX lands.
+
+# Stock entity — gold_stock.stock since its 2026-08-17 relocation to the stock
+# domain (its own gold database, like price); the old gold_product.stock
+# id/path was stale (UIFPE-167). Lifecycle DRAFT: NO watermark_column until
+# the table leaves draft (see the gold_product.product comment above) — the
+# live catalog detects _gold_updated_at once it lands.
+- id: gold_stock.stock
+  domain: stock
+  kind: iceberg
+  path: glue_catalog.eds_dev_gold_stock.stock
+  path_by_env:
+    sandbox: glue_catalog.eds_dev_gold_stock.stock
+    dev: glue_catalog.uif_echo_dev_gold_stock.stock
+  owner: Enterprise Data Connect
+  refresh: daily
+  sensitivity: internal   # master.json dataClassification
+  eligible_formats: [csv, json]
+  # offline fallback for the column picker (live Glue introspection takes
+  # over when the table lands); business columns only, no _-metadata —
+  # domains/stock/src/schemas/gold/stock/v1/master.json
+  columns: [product_id, isbn13, organization_code, on_hand_quantity, available_to_promise_timestamp, available_to_promise_indicator]
+
+# UIFPE-220: the gold_assessment.results row was removed for the same reason
+# as onix_3_0 above — a dead eds_dev_gold_* path no environment resolves.

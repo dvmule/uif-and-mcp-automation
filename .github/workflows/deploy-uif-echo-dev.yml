@@ -1,0 +1,247 @@
+name: Deploy uif-echo — Dev
+
+# Greenfield uif-echo-dev-* stack — calls the three deploy scripts:
+#   uif-echo-infra-deploy.sh   Terraform init / plan / apply
+#   uif-echo-apps-deploy.sh    Glue scripts + Lambda/layer apply
+#   uif-echo-ui-deploy.sh      UI build, S3 sync, CloudFront invalidation
+#
+# Uses ENV=dev-uif (envs/dev-uif.tfvars, backends/dev-uif.hcl).
+# Does NOT touch the live echo-dev-* stack (envs/dev.tfvars).
+#
+# Auth: shared OIDC role secrets.AWS_ROLE_ARN_DEV (same as Beacon / product).
+#
+# HOW TO CHOOSE WHAT RUNS
+#
+#   REPO VARIABLES (Settings → Actions → Variables)
+#     UIF_ECHO_DEV_INFRA   skip | plan | apply   (default skip)
+#     UIF_ECHO_DEV_APPS    skip | plan | apply   (default skip)
+#     UIF_ECHO_DEV_UI      true | false          (default false)
+#     UIF_ECHO_API_URL_DEV optional UI API override; else Terraform output
+#
+#   workflow_dispatch inputs override variables for that run.
+#
+#   !! Leave INFRA/APPS unset outside deploy windows. apply on push runs
+#   Terraform unattended with nobody reading the plan.
+#
+# BLOCKERS before first green apply:
+#   - Phase 5: s3://uif-echo-dev-data bootstrapped (tfstate/, code/lambda-layers/)
+#     see deploy/layers/README.md
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "stacks/echo/**"
+      - ".github/workflows/deploy-uif-echo-dev.yml"
+  workflow_dispatch:
+    inputs:
+      infra:
+        description: "Infra script (uif-echo-infra-deploy.sh): skip | plan | apply"
+        required: false
+        default: skip
+        type: choice
+        options: [skip, plan, apply]
+      apps:
+        description: "Apps script (uif-echo-apps-deploy.sh): skip | plan | apply"
+        required: false
+        default: skip
+        type: choice
+        options: [skip, plan, apply]
+      deploy_ui:
+        description: "Run uif-echo-ui-deploy.sh"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: eu-west-1
+  TF_ENV: dev-uif
+  STACK_DIR: stacks/echo
+  DEPLOY_DIR: stacks/echo/infrastructure/deploy
+
+concurrency:
+  group: deploy-uif-echo-dev
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve what runs (uif-echo stack)
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.pick.outputs.infra }}
+      apps: ${{ steps.pick.outputs.apps }}
+      ui: ${{ steps.pick.outputs.ui }}
+    steps:
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_INFRA: ${{ inputs.infra }}
+          IN_APPS: ${{ inputs.apps }}
+          IN_UI: ${{ inputs.deploy_ui }}
+          VAR_INFRA: ${{ vars.UIF_ECHO_DEV_INFRA }}
+          VAR_APPS: ${{ vars.UIF_ECHO_DEV_APPS }}
+          VAR_UI: ${{ vars.UIF_ECHO_DEV_UI }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            infra="${IN_INFRA:-skip}"
+            apps="${IN_APPS:-skip}"
+            ui="${IN_UI:-false}"
+            source="workflow_dispatch"
+          else
+            infra="${VAR_INFRA:-skip}"
+            apps="${VAR_APPS:-skip}"
+            ui=$([ "${VAR_UI:-}" = "true" ] && echo true || echo false)
+            source="repo variables"
+          fi
+          for mode in "$infra" "$apps"; do
+            case "$mode" in
+              skip|plan|apply) ;;
+              *) echo "$mode must be skip, plan, or apply"; exit 1 ;;
+            esac
+          done
+          [ "$ui" = "true" ] || ui=false
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "::notice::Resolved from $source — infra=$infra apps=$apps ui=$ui"
+          if [ "$infra" = "apply" ] && [ "$EVENT" != "workflow_dispatch" ]; then
+            echo "::warning::UIF_ECHO_DEV_INFRA=apply on push — unattended apply."
+          fi
+          if [ "$apps" = "apply" ] && [ "$infra" != "apply" ] && [ "$infra" != "skip" ]; then
+            echo "::warning::apps=apply with infra=plan — run infra apply first in a separate job or combined dispatch."
+          fi
+
+  tests:
+    name: tests (uif-echo stack)
+    needs: resolve
+    if: >-
+      needs.resolve.outputs.infra != 'skip' ||
+      needs.resolve.outputs.apps != 'skip' ||
+      needs.resolve.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: ${{ env.STACK_DIR }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install -r src/requirements.txt
+          pip install -r qe/control_panel/requirements-dev.txt
+
+      - name: pytest (per suite)
+        run: |
+          set -uo pipefail
+          rc=0
+          for suite in pipeline control_panel lambdas libs; do
+            echo "::group::pytest ${{ env.STACK_DIR }}/qe/$suite"
+            python -m pytest "${{ env.STACK_DIR }}/qe/$suite" -q || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
+
+  infra:
+    name: infra ${{ needs.resolve.outputs.infra }} (uif-echo stack)
+    needs: [resolve, tests]
+    if: needs.resolve.outputs.infra != 'skip'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: uif-echo-infra-deploy.sh
+        env:
+          UIF_ECHO_TF_MODE: ${{ needs.resolve.outputs.infra }}
+        run: |
+          set -euo pipefail
+          bash "${{ env.DEPLOY_DIR }}/uif-echo-infra-deploy.sh" "${{ env.TF_ENV }}"
+
+  apps:
+    name: apps ${{ needs.resolve.outputs.apps }} (uif-echo stack)
+    needs: [resolve, tests, infra]
+    if: >-
+      always() &&
+      needs.resolve.outputs.apps != 'skip' &&
+      needs.tests.result == 'success' &&
+      (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: uif-echo-apps-deploy.sh
+        env:
+          UIF_ECHO_TF_MODE: ${{ needs.resolve.outputs.apps }}
+        run: |
+          set -euo pipefail
+          bash "${{ env.DEPLOY_DIR }}/uif-echo-apps-deploy.sh" "${{ env.TF_ENV }}"
+
+  ui:
+    name: ui (uif-echo stack)
+    needs: [resolve, tests, infra]
+    if: >-
+      always() &&
+      needs.resolve.outputs.ui == 'true' &&
+      needs.tests.result == 'success' &&
+      (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ${{ env.STACK_DIR }}/ui/package-lock.json
+
+      - name: uif-echo-ui-deploy.sh
+        env:
+          API_OVERRIDE: ${{ vars.UIF_ECHO_API_URL_DEV }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "${API_OVERRIDE:-}" ]; then
+            extra=("$API_OVERRIDE")
+          fi
+          bash "${{ env.DEPLOY_DIR }}/uif-echo-ui-deploy.sh" "${{ env.TF_ENV }}" "${extra[@]}"

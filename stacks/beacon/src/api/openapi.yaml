@@ -1,0 +1,788 @@
+openapi: 3.0.3
+info:
+  title: Beacon Control Panel API
+  version: 0.1.0
+  description: >
+    Self-service authoring surface for RELAY Beacon exports. One API for all
+    three authoring doors: the web UI, MCP agents, and CI validation of
+    Git-authored configs. Runs as a FastAPI container on ECS Fargate behind
+    the RELAY API Gateway (design doc D19); the API holds the sole IAM role —
+    browsers never call AWS directly.
+
+    Phase 3 slice implemented here: registries (read), destinations
+    (author-owned CRUD slice), config validation, and the deterministic
+    query-to-config converter (Door 2). AuthN (Entra ID JWT via the gateway
+    authorizer) and RBAC enforcement are wired in a later slice — every
+    endpoint below is designed to sit behind them.
+# Apicurio registry coordinate — stacks/apicurio/standards/guidelines.md §1,
+# stacks/apicurio/standards/apicurio-governance.md. Artifact id matches the API
+# Gateway resource name already in use (infrastructure/terraform/apigateway.tf).
+x-registry:
+  group: beacon
+  artifact: beacon-api
+  compatibility: BACKWARD
+
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      responses:
+        "200": {description: OK}
+
+  /registries/sources:
+    get:
+      summary: List catalogued sources (source registry)
+      parameters:
+        - name: formats
+          in: query
+          required: false
+          description: >
+            Comma-separated formats the partner needs. Only sources whose
+            eligible_formats include ALL requested formats are returned
+            (D17 — e.g. an ONIX feed is XML-only).
+          schema: {type: string, example: "csv,json"}
+      responses:
+        "200":
+          description: Sources visible to the caller
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Source"}
+
+  /registries/relationships:
+    get:
+      summary: How Gold tables relate to each other — the join Beacon fills in when a related table joins a feed (UIFPE-580)
+      description: >
+        A fixed, owner-maintained list (never inferred from column names).
+        Each entry names the driving and related Gold TABLES, the join to
+        declare (type, condition, and for a relationship that goes through a
+        list column on the driving row, a `through` step that spreads the list
+        into one row per element before the match), optional `unnest` steps
+        that spread a list on the related table after the join (one row per
+        price), and the columns the Filter step would typically narrow by.
+        `{table}` in SQL stands for the feed alias of that table. Joins
+        produce flat rows, one per match, for every output format.
+      responses:
+        "200":
+          description: The declared relationships
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  relationships:
+                    type: array
+                    items: {$ref: "#/components/schemas/Relationship"}
+
+  /registries/sources/{source_id}/columns:
+    get:
+      summary: A source's authoring columns, read LIVE from the source (Glue catalog / CSV header)
+      description: >
+        The mapping and filter steps' attribute lists. Platform metadata
+        columns (leading underscore) are stripped. Falls back to the registry
+        row's static column list when live introspection is unavailable.
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: {type: string, example: product.product}
+      responses:
+        "200":
+          description: Column names, provenance and — for live iceberg sources — catalogued types
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SourceColumns"}
+        "404": {description: Unknown source}
+
+  /registries/sources/{source_id}/columns/{column}/values:
+    get:
+      summary: The column's most common values, live from Gold via Athena (UIFPE-441)
+      description: >
+        Suggestions for the Filter step's attribute conditions — the top
+        values by frequency, read synchronously on Athena and cached briefly
+        per API instance. Free text stays allowed; this is a hint. A column
+        that cannot be suggested answers 200 with an empty list and a
+        `reason`, never an error, and WITHOUT an Athena call when the refusal
+        is decided by name or by the profile: identifier columns (ppid, isbn*,
+        product_id, parent_product_id, inventory_item_id, source_item_number,
+        program_id, content_id — whole-name, case-insensitive), a column the
+        persisted cardinality profile puts over 1,000 distinct values
+        (UIFPE-514: "more than 1,000 distinct values — type the value, or use
+        Custom Spark SQL"), dates, structured types. Live preview not
+        configured and Athena too slow are reasons as well. With no persisted
+        profile the call proceeds as before.
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: {type: string, example: product.product}
+        - name: column
+          in: path
+          required: true
+          schema: {type: string, example: item_type}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 50, default: 50}
+      responses:
+        "200":
+          description: Values (possibly empty, with a reason)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ColumnValues"}
+        "404": {description: Unknown source or column}
+
+  /registries/sources/{source_id}/profile:
+    get:
+      summary: The table's persisted cardinality profile, if a fresh one exists (UIFPE-514)
+      description: >
+        Row count + approximate distinct count per scalar column of one Gold
+        table — what decides which attributes the Filter step's picker
+        offers: identifiers by name never, text over 1,000 distinct values
+        never, numbers/dates/booleans always. The profile is measured
+        asynchronously (POST here, poll /profile/{profile_id}) and a finished
+        one is written to s3://<data bucket>/<preview prefix>/profiles/<db>.<table>.json,
+        from where this GET serves it for a day (`persisted: true`). NEVER
+        starts Athena: `{status: absent}` when no fresh profile exists,
+        `{status: unavailable, reason}` when the table cannot be profiled at
+        all (live preview not configured, registry-fallback schema, not a
+        Gold iceberg table, no scalar columns). `unique_like` stays in the
+        payload for compatibility; the picker no longer hides on it.
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: {type: string, example: product.product}
+      responses:
+        "200":
+          description: done (persisted) | absent | unavailable
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ColumnProfile"}
+        "404": {description: Unknown source}
+    post:
+      summary: Start measuring the table's cardinality profile on Athena (UIFPE-514)
+      description: >
+        One execution — `count(*)` plus `approx_distinct` per scalar column
+        (arrays/structs are skipped), opened with the preview MARKER and
+        written under the preview prefix like every query this API starts.
+        Idempotent: a fresh persisted profile answers 200 done without
+        touching Athena, so the wizard fires this on every source pick and
+        the table is scanned at most once a day. Poll the returned
+        `profile_id` with GET /profile/{profile_id}.
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: {type: string, example: product.product}
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProfileStart"}
+        "200":
+          description: "done — a fresh persisted profile already exists; or unavailable, with the reason"
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ColumnProfile"}
+        "404": {description: Unknown source}
+        "502": {description: Athena refused to start the scan}
+        "503": {description: "Live preview not configured (BEACON_PREVIEW_WORKGROUP / BEACON_DATA_BUCKET), or Athena is busy"}
+
+  /registries/sources/{source_id}/profile/{profile_id}:
+    get:
+      summary: Poll a profile scan; the first poll that sees it finished persists the profile
+      description: >
+        running | done | failed | cancelled. A scan pending longer than the
+        preview's age cap (5 minutes) is stopped and answered `cancelled`
+        with a reason. A finished scan is read, written to the profiles/
+        object and answered as `done` with `persisted` saying whether the
+        write succeeded (a failed write still answers the numbers; the next
+        GET /profile then finds it absent and the wizard starts another). 404
+        for an id this API did not start (marker + prefix), for a preview's
+        or download's execution (the query must contain `approx_distinct(`),
+        and for a profile of another table than the source's.
+      parameters:
+        - name: source_id
+          in: path
+          required: true
+          schema: {type: string, example: product.product}
+        - name: profile_id
+          in: path
+          required: true
+          schema: {type: string, description: The Athena query-execution id POST returned}
+      responses:
+        "200":
+          description: running | done | failed | cancelled
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProfileStatus"}
+        "404": {description: "Unknown profile — not ours, not a profile, or another table's"}
+        "503": {description: Live preview not configured}
+
+  /registries/formats:
+    get:
+      summary: List registered output formats with their option schemas
+      responses:
+        "200":
+          description: Formats; the UI renders per-format option forms from options_schema
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Format"}
+
+  /registries/channels:
+    get:
+      summary: List delivery channel types (admin-owned adapters)
+      responses:
+        "200": {description: Channel types}
+
+  /destinations:
+    get:
+      summary: List destinations (author-owned partner endpoints)
+      responses:
+        "200": {description: Destinations visible to the caller}
+    post:
+      summary: Create a destination (credential goes to Secrets Manager, never stored here)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NewDestination"}
+      responses:
+        "201": {description: Created; status is pending until the connection test passes}
+        "422": {description: Invalid destination definition}
+
+  /convert:
+    post:
+      summary: "Door 2: convert a source SQL query into a draft mapping config"
+      description: >
+        Deterministic sqlglot-based conversion. The query is parsed and
+        transpiled, NEVER executed (D11). Unsupported constructs (window
+        functions, subqueries, GROUP BY) are returned as unresolved items,
+        never silently dropped (D12).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sql]
+              properties:
+                sql: {type: string}
+                dialect:
+                  type: string
+                  description: oracle | tsql | mysql | postgres | spark; omitted = auto-detect
+      responses:
+        "200":
+          description: Draft conversion result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ConversionResult"}
+        "422": {description: Query could not be parsed in any supported dialect}
+
+  /validate/export-config:
+    post:
+      summary: Validate an export config (render/package/deliver contract)
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses:
+        "200":
+          description: "{valid: bool, error: str|null}"
+
+  /validate/mapping-config:
+    post:
+      summary: Validate a mapping config with the dynamic-mapping engine's own static validators
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses:
+        "200":
+          description: >
+            {valid: bool, issues: [{where, message}], engine_available: bool}.
+            engine_available=false means the engine package is not importable
+            in this deployment and only presence checks ran.
+
+  /preview/filter:
+    post:
+      summary: Start a live preview of a draft's row filter on Athena (UIFPE-441)
+      description: >
+        Asynchronous — API Gateway caps the API at 29 s and a Gold scan takes
+        longer. The body is the draft's mapping config (the stub literal
+        mapping the wizard's Check filter sends is fine) plus the identifier
+        lists spelled out. The config is run through the engine's static
+        validators first and every clause is transpiled Spark → Trino with
+        sqlglot; a clause Athena cannot run (a left_semi join, a function with
+        no Trino equivalent, a CSV source) REFUSES the preview with the
+        validator's issue shape rather than previewing different semantics.
+        Athena is the state store: the returned preview_id is the executions'
+        ids. Honesty note carried in every result — Athena speaks Trino, the
+        export runs on Spark; a preview failure is a hint, not proof.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mapping_config]
+              properties:
+                mapping_config: {type: object, description: The draft's mapping config}
+                lists:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [column, values]
+                    properties:
+                      column: {type: string, example: product.isbn13}
+                      values: {type: array, maxItems: 5000, items: {type: string}}
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PreviewStart"}
+        "200":
+          description: "Refused: {status: refused, issues: [{where, message}]}"
+        "422": {description: Malformed body}
+        "503": {description: Live preview not configured, or Athena is busy}
+
+  /preview/{preview_id}:
+    get:
+      summary: Poll a preview
+      parameters:
+        - name: preview_id
+          in: path
+          required: true
+          schema: {type: string, description: Dotted Athena query-execution ids, as returned by POST}
+      responses:
+        "200":
+          description: running | done | failed | cancelled
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PreviewStatus"}
+        "404": {description: Unknown preview — or one this API did not start}
+    delete:
+      summary: Stop a preview's pending executions (idempotent)
+      parameters:
+        - name: preview_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: "{cancelled: true, stopped: [query names]}"
+        "404": {description: Unknown preview}
+
+  /preview/download:
+    post:
+      summary: Start writing every row a draft's filter matches as one CSV on Athena (UIFPE-490)
+      description: >
+        The preview's sample query with the download cap (100,000 rows) in
+        place of its 10-row LIMIT: every matched row, in the preview's
+        columns, written by Athena as one CSV under the data bucket's
+        preview/ prefix (expired after a day). Same body and the same fences
+        as /preview/filter — the engine's validators first, every clause
+        transpiled Spark → Trino, a refusal in the validator's issue shape.
+        One execution; poll it with GET. Nothing is downloaded for the
+        author: a finished poll carries a short-lived presigned link they
+        click. The file is the raw Gold rows after the join and filter, not
+        the rendered export.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mapping_config]
+              properties:
+                mapping_config: {type: object, description: The draft's mapping config}
+                lists:
+                  type: array
+                  maxItems: 10
+                  items:
+                    type: object
+                    required: [column, values]
+                    properties:
+                      column: {type: string, example: product.isbn13}
+                      values: {type: array, maxItems: 5000, items: {type: string}}
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PreviewDownloadStart"}
+        "200":
+          description: "Refused: {status: refused, issues: [{where, message}]}"
+        "422": {description: Malformed body}
+        "503": {description: Live preview not configured, or Athena is busy}
+
+  /preview/download/{download_id}:
+    get:
+      summary: Poll a download; a finished one carries the presigned link
+      parameters:
+        - name: download_id
+          in: path
+          required: true
+          schema: {type: string, description: The Athena query-execution id POST returned}
+      responses:
+        "200":
+          description: running | done | failed | cancelled
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PreviewDownloadStatus"}
+        "404": {description: Unknown download — not ours, or a preview's execution rather than a download's}
+    delete:
+      summary: Stop a pending download (idempotent)
+      parameters:
+        - name: download_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: "{cancelled: true, stopped: [download] | []}"
+        "404": {description: Unknown download}
+
+  /runs/summary:
+    get:
+      summary: Counts by status of every recorded run in a time window (UIFPE-610)
+      description: >
+        Reads the whole runs table (every page), keeps rows with
+        since <= recorded_at < until, and returns counts only — the Overview's
+        Run outcomes donut and KPIs. Which statuses are outcomes and which are
+        neutral (stopped, skipped, missed) is the UI's rule. Runs still executing
+        have no recorded row yet and are not counted.
+      parameters:
+        - name: since
+          in: query
+          schema: {type: string, format: date-time, description: "Window start (inclusive); default until minus 7 days"}
+        - name: until
+          in: query
+          schema: {type: string, format: date-time, description: "Window end (exclusive); default now"}
+      responses:
+        "200":
+          description: The counts, or {enabled false, reason} when the runs table is not configured
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: {type: boolean}
+                  since: {type: string, format: date-time}
+                  until: {type: string, format: date-time}
+                  total: {type: integer}
+                  by_status:
+                    type: object
+                    additionalProperties: {type: integer}
+                    example: {succeeded: 41, failed: 3, stopped: 1}
+                  reason: {type: string}
+        "422": {description: "Unparseable time, since not before until, a window starting in the future, or wider than 366 days"}
+
+components:
+  schemas:
+    Source:
+      type: object
+      properties:
+        id: {type: string, example: gold_product.product}
+        domain: {type: string, example: product}
+        kind: {type: string, example: iceberg}
+        path: {type: string, example: glue_catalog.eds_dev_gold_product.product}
+        owner: {type: string}
+        refresh: {type: string, example: daily 06:30}
+        sensitivity: {type: string, enum: [internal, commercial, restricted]}
+        eligible_formats:
+          type: array
+          items: {type: string}
+          description: Formats this source may be exported in (D17); default all registered
+    ListStep:
+      type: object
+      required: [list, alias]
+      description: >
+        UIFPE-580. A list column spread into one row per element (outer, so an
+        empty list keeps its row). `list` is `source.column`; the element is
+        then addressed as `alias.<field>` (array of structs) or `alias.value`
+        (array of scalars). A join's `through` step runs before that join; the
+        config's `unnest` steps run after every join and before the filters.
+      properties:
+        list: {type: string, example: product.marketing_copy}
+        alias: {type: string, example: product_copy}
+    Relationship:
+      type: object
+      required: [driving, related, join]
+      properties:
+        driving: {type: string, example: product}
+        related: {type: string, example: marketing_copy}
+        summary: {type: string, example: through each product's marketing copy list, matched on content id}
+        join:
+          type: object
+          properties:
+            type: {type: string, example: left}
+            condition: {type: string, example: "product_copy.content_id = {marketing_copy}.content_id"}
+            through: {$ref: "#/components/schemas/ListStep"}
+        unnest:
+          type: array
+          items: {$ref: "#/components/schemas/ListStep"}
+        narrow_by:
+          type: array
+          items: {type: string}
+          description: Columns the Filter step would typically narrow the rows by (one org, one price list, one market)
+    SourceColumns:
+      type: object
+      required: [source_id, columns, provenance]
+      properties:
+        source_id: {type: string, example: product.product}
+        columns:
+          type: array
+          items: {type: string}
+          description: >
+            Authoring columns; platform `_`-prefixed metadata columns stripped,
+            and since UIFPE-540 the columns the entity's Gold master permits on
+            no channel (`x-channels: []`) removed — beacon is the message
+            channel, so those are internal to the platform.
+        provenance: {type: string, enum: [live, registry]}
+        reason:
+          type: string
+          description: With provenance=registry — why live introspection was unavailable
+        missing:
+          type: boolean
+          description: >
+            UIFPE-569. With provenance=registry — true when the catalog has no
+            such table (or database): a registry-listed Gold source whose
+            first load has not landed in this environment, not a transient
+            outage. The preview refuses such a source saying so instead of
+            "try again shortly". Absent otherwise.
+        excluded:
+          type: array
+          items: {type: string}
+          description: >
+            UIFPE-540. Catalogued columns withheld because the Gold master
+            declares them on no channel — reported rather than silently
+            dropped so the panel can say why one is missing. Absent when
+            nothing was withheld.
+          example: [inventory_item_id, organization_id]
+        eligibility:
+          type: string
+          enum: [unverified]
+          description: >
+            UIFPE-540. Present only when a Gold source's master could not be
+            read, so `columns` is UNFILTERED and may contain columns that are
+            not exportable. Submitting a config against such a source is
+            refused. Absent means the list was either filtered or had nothing
+            to filter.
+        types:
+          type: object
+          additionalProperties: {type: string}
+          description: >
+            Column -> catalogued type string, raw from Glue (string, bigint,
+            decimal(10,2), date, timestamp, array<string>, array<struct<...>>).
+            Present only for live iceberg sources: a CSV header carries no
+            types and the registry fallback has none — absent means unknown.
+            The wizard's row-filter builder picks its operators from it.
+        descriptions:
+          type: object
+          additionalProperties: {type: string}
+          description: >
+            UIFPE-562. Column -> the attribute's `description` from the
+            entity's Gold master (`schemas/gold/<entity>/v1/master.json` in
+            the gold artifacts bucket), verbatim, keyed by the catalogued
+            snake_case name. Only columns the master documents appear.
+            Absent when no artifacts bucket is configured, the source is not
+            a Gold table, or the master could not be read — absent means
+            unknown. The wizard shows it beside the attribute on the Mapping
+            and Filter steps.
+          example: {isbn13: "International Standard Book Number auto-assigned to items in PDH; generally assigned to sellable items in the Higher Education, Schools and English Language Learning lines of business."}
+    Format:
+      type: object
+      properties:
+        id: {type: string, example: csv}
+        kind: {type: string, enum: [data, document]}
+        options_schema: {type: object, description: JSON Schema for per-format options}
+    NewDestination:
+      type: object
+      required: [name, channel, host, remote_dir, credential]
+      properties:
+        name: {type: string}
+        channel: {type: string, example: sftp}
+        host: {type: string}
+        port: {type: integer, default: 22}
+        remote_dir: {type: string}
+        domain: {type: string, description: owning domain (scoped by the caller's grant)}
+        credential:
+          type: object
+          description: Forwarded to Secrets Manager; never persisted or returned by this API
+    ConversionResult:
+      type: object
+      properties:
+        sources: {type: array, items: {type: object}}
+        joins: {type: array, items: {type: object}}
+        mappings: {type: array, items: {type: object}}
+        filters:
+          type: array
+          items: {type: string}
+          description: >
+            WHERE conditions as Spark SQL booleans — the mapping config's
+            `filters` block (D18): ANDed by the engine, applied to the joined
+            frame before mapping.
+        unresolved:
+          type: array
+          items:
+            type: object
+            properties:
+              target: {type: string}
+              expression: {type: string}
+              reason: {type: string}
+        notes: {type: array, items: {type: string}}
+        dialect_detected: {type: string}
+    ColumnValues:
+      type: object
+      required: [source_id, column, values, counts, truncated, cached]
+      properties:
+        source_id: {type: string}
+        column: {type: string}
+        values: {type: array, items: {type: string}, description: Most common first; empty with a reason when not suggestible}
+        counts: {type: array, items: {type: integer}, description: Row count per value, same order}
+        truncated: {type: boolean, description: More distinct values exist than were returned}
+        cached: {type: boolean}
+        sampled_at: {type: string, format: date-time}
+        reason: {type: string, description: Why no values were returned}
+    ColumnProfile:
+      type: object
+      required: [status, source_id]
+      properties:
+        status: {type: string, enum: [done, absent, unavailable]}
+        source_id: {type: string}
+        db: {type: string, description: done — the Gold database the profile was measured on}
+        table: {type: string, description: done — the Gold table}
+        rows: {type: integer, description: done — the table's row count}
+        columns:
+          type: object
+          description: done — scalar columns only (arrays/structs are not profiled)
+          additionalProperties:
+            type: object
+            properties:
+              distinct: {type: integer, nullable: true, description: approx_distinct}
+              unique_like: {type: boolean, description: "distinct ≥ half the rows — kept for compatibility, the picker no longer hides on it"}
+              identifier: {type: boolean, description: "An identifier by name: ppid, isbn*, product_id, parent_product_id, inventory_item_id, source_item_number, program_id, content_id"}
+        sampled_at: {type: string, format: date-time, description: "done — when it was measured; served for 86,400 s from then"}
+        query_execution_id: {type: string, description: done — the Athena execution that measured it}
+        persisted: {type: boolean, description: "done — true when served from, or written to, the profiles/ object"}
+        reason: {type: string, description: unavailable — why the table cannot be profiled}
+    ProfileStart:
+      type: object
+      required: [status, source_id, profile_id]
+      properties:
+        status: {type: string, enum: [running]}
+        source_id: {type: string}
+        profile_id: {type: string, description: The one Athena query-execution id}
+    ProfileStatus:
+      type: object
+      required: [status, source_id]
+      properties:
+        status: {type: string, enum: [running, done, failed, cancelled]}
+        source_id: {type: string}
+        started_at: {type: string, format: date-time}
+        elapsed_s: {type: number}
+        db: {type: string}
+        table: {type: string}
+        rows: {type: integer, description: done}
+        columns:
+          type: object
+          description: done — as ColumnProfile.columns
+          additionalProperties:
+            type: object
+            properties:
+              distinct: {type: integer, nullable: true}
+              unique_like: {type: boolean}
+              identifier: {type: boolean}
+        sampled_at: {type: string, format: date-time}
+        query_execution_id: {type: string}
+        persisted: {type: boolean, description: done — whether the profiles/ object was written}
+        scanned_bytes: {type: integer, description: done}
+        error:
+          type: object
+          properties:
+            query: {type: string, enum: [profile]}
+            message: {type: string, description: Athena's own reason}
+        reason: {type: string, description: cancelled — why the API stopped it}
+    PreviewStart:
+      type: object
+      required: [status, preview_id, queries]
+      properties:
+        status: {type: string, enum: [running]}
+        preview_id: {type: string}
+        queries:
+          type: object
+          properties:
+            counts: {type: string}
+            sample: {type: string}
+            missing: {type: array, items: {type: string}}
+        lists:
+          type: array
+          items:
+            type: object
+            properties:
+              column: {type: string}
+              requested: {type: integer}
+    PreviewStatus:
+      type: object
+      required: [status]
+      properties:
+        status: {type: string, enum: [running, done, failed, cancelled]}
+        started_at: {type: string, format: date-time}
+        elapsed_s: {type: number}
+        queries: {type: object, additionalProperties: {type: string}, description: running only — state per query}
+        total: {type: integer, description: Rows after the joins, before the filter}
+        matched: {type: integer, description: Rows the filter keeps}
+        sample:
+          type: object
+          properties:
+            columns: {type: array, items: {type: string}, description: alias.column labels}
+            rows: {type: array, items: {type: array, items: {type: string, nullable: true}}}
+        missing:
+          type: array
+          description: One entry per list in the request, positional
+          items:
+            type: object
+            properties:
+              column: {type: string}
+              missing: {type: array, items: {type: string}}
+              truncated: {type: boolean}
+        scanned_bytes: {type: integer}
+        error:
+          type: object
+          properties:
+            # quoted: an unquoted `[` opens a flow sequence inside the flow
+            # mapping, which made this whole contract unparseable as YAML
+            query: {type: string, description: "counts | sample | missing[i]"}
+            message: {type: string, description: Athena's own reason}
+        reason: {type: string, description: cancelled — why the API stopped it}
+        note: {type: string, description: The Trino-vs-Spark honesty note}
+    PreviewDownloadStart:
+      type: object
+      required: [status, download_id, row_cap]
+      properties:
+        status: {type: string, enum: [running]}
+        download_id: {type: string, description: The one Athena query-execution id}
+        row_cap: {type: integer, example: 100000, description: The most rows the CSV will hold}
+        columns: {type: array, items: {type: string}, description: alias.column labels, the CSV's header}
+    PreviewDownloadStatus:
+      type: object
+      required: [status, row_cap]
+      properties:
+        status: {type: string, enum: [running, done, failed, cancelled]}
+        started_at: {type: string, format: date-time}
+        elapsed_s: {type: number}
+        row_cap: {type: integer}
+        url: {type: string, description: done — presigned GET on the CSV, Content-Disposition attachment}
+        expires_seconds: {type: integer, example: 900}
+        filename: {type: string, example: beacon-product-matched-rows-20260921-101500Z.csv}
+        bytes: {type: integer, nullable: true, description: The CSV's size when S3 could report it}
+        scanned_bytes: {type: integer}
+        error:
+          type: object
+          properties:
+            query: {type: string, enum: [download]}
+            message: {type: string, description: Athena's own reason}
+        reason: {type: string, description: cancelled — why the API stopped it}
+        note: {type: string, description: The Trino-vs-Spark honesty note}

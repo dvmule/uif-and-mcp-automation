@@ -1,0 +1,40 @@
+{
+  "name": "product-developer-registration-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UIF reference API — implements capabilities/api/guidelines.md end to end.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run tests/unit",
+    "test:contract": "vitest run tests/contract",
+    "docs": "redocly build-docs openapi.yaml -o dist/docs/index.html"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "@types/supertest": "^6.0.2",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "eslint": "^8.57.0",
+    "supertest": "^7.0.0",
+    "tsx": "^4.15.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0",
+    "yaml": "^2.4.5"
+  }
+}

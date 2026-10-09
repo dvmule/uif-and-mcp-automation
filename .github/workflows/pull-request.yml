@@ -1,0 +1,47 @@
+name: Pull Request
+
+# A pull request is the only artifact in the chain that gets read before the
+# diff, and the only one the PM and QE Lead read at all. The commit gates
+# (smart-commit.yml, commit-identity.yml) make the history traceable; this one
+# makes the change reviewable:
+#
+#   UIFPE-<n> in the title      so a reader searching Jira finds what shipped
+#   a title that names it       "Product Data API", not "updates"
+#   ## Summary                  what changed and why
+#   ## Verification             how you know it works
+#
+# The rule is defined once in .githooks/lint-pr.sh, which an FDE can run before
+# opening the PR. `edited` is in the trigger list on purpose: the fix is to
+# correct the title or body on the PR itself, and the check reruns with no new
+# commit needed.
+#
+# Convention: capabilities/delivery/jira-github-integration.md
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  reviewable:
+    name: Title and body are reviewable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the pull request title and body
+        env:
+          # Via the environment, never interpolated into the script: a PR title
+          # is attacker-controlled text and `${{ }}` would splice it into the
+          # shell.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          .githooks/lint-pr.sh \
+            --title "$PR_TITLE" \
+            --body-file "$RUNNER_TEMP/pr-body.md" \
+            --branch "$PR_BRANCH"

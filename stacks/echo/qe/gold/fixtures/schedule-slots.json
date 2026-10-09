@@ -1,0 +1,168 @@
+{
+  "_comment": [
+    "SHARED TEST VECTOR for the UIFPE-149 slot arithmetic. Asserted by BOTH",
+    "qe/test_gold_frequency_parity.py (against gold_frequencies.py) and",
+    "ui/src/lib/__tests__/schedule.test.ts (against pipelines.ts). The Python",
+    "module is the source of truth and the TypeScript copy exists only because",
+    "the wizard has to preview a table's run times; this file is what stops the",
+    "two from drifting into disagreeing about WHEN a pipeline runs.",
+    "",
+    "Slot values are minutes since midnight UTC. Timestamps are UTC.",
+    "Every case here was chosen for a reason — see `why` on each.",
+    "",
+    "gold-weekly (UIFPE-532) walks a 7-day grid of (weekday in weekly_days,",
+    "start_time) in UTC. previousSlot cases may carry `weekly_days`; when",
+    "absent the default [\"MON\"] applies. 2026-09-23 is a Wednesday."
+  ],
+
+  "slots": [
+    {
+      "why": "The canonical example. 8h from 06:30 tiles the day evenly because 480 divides 1440; the 22:30 -> 06:30 wrap is exactly 8h, not a short night.",
+      "start_time": "06:30", "frequency": "gold-8h",
+      "expectAll": [390, 870, 1350]
+    },
+    {
+      "why": "A start time that is NOT itself the first slot of the day. 14:45 on a 4h interval phases to 02:45, and 14:45 must still appear.",
+      "start_time": "14:45", "frequency": "gold-4h",
+      "expectAll": [165, 405, 645, 885, 1125, 1365]
+    },
+    {
+      "why": "Product's live daily schedule: exactly one slot, at 06:30.",
+      "start_time": "06:30", "frequency": "gold-24h",
+      "expectAll": [390]
+    },
+    {
+      "why": "6h from 06:30 phases to 00:30 — an interval that does not divide the start time.",
+      "start_time": "06:30", "frequency": "gold-6h",
+      "expectAll": [30, 390, 750, 1110]
+    },
+    {
+      "why": "12h, the two-slot case.",
+      "start_time": "06:30", "frequency": "gold-12h",
+      "expectAll": [390, 1110]
+    },
+    {
+      "why": "2h from 06:30 phases to 00:30.",
+      "start_time": "06:30", "frequency": "gold-2h",
+      "expectCount": 12, "expectFirst": 30, "expectLast": 1350
+    },
+    {
+      "why": "The 8h default start time, which is deliberately staggered off :00.",
+      "start_time": "00:53", "frequency": "gold-8h",
+      "expectAll": [53, 533, 1013]
+    },
+    {
+      "why": "The hourly rung on its historical :45 offset.",
+      "start_time": "00:45", "frequency": "gold-1h",
+      "expectCount": 24, "expectFirst": 45, "expectLast": 1425
+    },
+    {
+      "why": "The finest rung, aligned to midnight: a full 288-slot day.",
+      "start_time": "00:00", "frequency": "gold-5m",
+      "expectCount": 288, "expectFirst": 0, "expectLast": 1435
+    },
+    {
+      "why": "15m on its staggered default.",
+      "start_time": "00:04", "frequency": "gold-15m",
+      "expectCount": 96, "expectFirst": 4, "expectLast": 1429
+    },
+    {
+      "why": "A start time in the last minutes of the day, phasing back to 00:20.",
+      "start_time": "23:50", "frequency": "gold-30m",
+      "expectCount": 48, "expectFirst": 20, "expectLast": 1430
+    },
+    {
+      "why": "10m on its staggered default.",
+      "start_time": "00:02", "frequency": "gold-10m",
+      "expectCount": 144, "expectFirst": 2, "expectLast": 1432
+    },
+    {
+      "why": "gold-weekly has at most ONE slot on a run day: the anchor itself. The day grid lives in previousSlot, not here.",
+      "start_time": "06:30", "frequency": "gold-weekly",
+      "expectAll": [390]
+    }
+  ],
+
+  "previousSlot": [
+    {
+      "why": "Mid-window: 15:00 falls after the 14:30 slot.",
+      "now": "2026-08-12T15:00:00Z", "start_time": "06:30",
+      "frequency": "gold-8h", "expect": "2026-08-12T14:30:00Z"
+    },
+    {
+      "why": "BEFORE the day's first slot — the answer is YESTERDAY's last one. This is the case a naive implementation gets wrong by clamping to midnight, which would make a pipeline look due every tick until 06:30.",
+      "now": "2026-08-12T02:00:00Z", "start_time": "06:30",
+      "frequency": "gold-8h", "expect": "2026-08-11T22:30:00Z"
+    },
+    {
+      "why": "Exactly ON the slot. Must return that slot, so a run started at 06:30 is not considered due again.",
+      "now": "2026-08-12T06:30:00Z", "start_time": "06:30",
+      "frequency": "gold-24h", "expect": "2026-08-12T06:30:00Z"
+    },
+    {
+      "why": "One minute BEFORE the daily slot: still yesterday's. A tick that fires slightly early must not dispatch today's run early.",
+      "now": "2026-08-12T06:29:00Z", "start_time": "06:30",
+      "frequency": "gold-24h", "expect": "2026-08-11T06:30:00Z"
+    },
+    {
+      "why": "Seconds are truncated: 10:07:45 resolves to the 06:45 slot, not to 10:45.",
+      "now": "2026-08-12T10:07:45Z", "start_time": "14:45",
+      "frequency": "gold-4h", "expect": "2026-08-12T06:45:00Z"
+    },
+    {
+      "why": "Midnight exactly, on the finest rung.",
+      "now": "2026-08-12T00:00:00Z", "start_time": "00:00",
+      "frequency": "gold-5m", "expect": "2026-08-12T00:00:00Z"
+    },
+    {
+      "why": "Last minute of the day on the finest rung.",
+      "now": "2026-08-12T23:59:00Z", "start_time": "00:00",
+      "frequency": "gold-5m", "expect": "2026-08-12T23:55:00Z"
+    },
+    {
+      "why": "Crosses a YEAR boundary backwards. Month/year arithmetic must come from real date handling, not from subtracting a day.",
+      "now": "2026-01-01T00:10:00Z", "start_time": "23:50",
+      "frequency": "gold-24h", "expect": "2025-12-31T23:50:00Z"
+    },
+    {
+      "why": "Crosses a month boundary backwards, on a leap-adjacent month.",
+      "now": "2026-03-01T00:05:00Z", "start_time": "23:30",
+      "frequency": "gold-12h", "expect": "2026-02-28T23:30:00Z"
+    },
+    {
+      "why": "Weekly, default day set: no weekly_days given means Monday. Wednesday resolves to the Monday just gone.",
+      "now": "2026-09-23T07:00:00Z", "start_time": "06:30",
+      "frequency": "gold-weekly", "expect": "2026-09-21T06:30:00Z"
+    },
+    {
+      "why": "Tue+Thu, mid-week: Wednesday afternoon resolves to Tuesday's slot, not to any interval arithmetic.",
+      "now": "2026-09-23T15:00:00Z", "start_time": "03:00", "weekly_days": ["TUE", "THU"],
+      "frequency": "gold-weekly", "expect": "2026-09-22T03:00:00Z"
+    },
+    {
+      "why": "Tue+Thu, the long gap: Monday resolves to LAST Thursday, five days back. Uneven gaps need no interval.",
+      "now": "2026-09-21T10:00:00Z", "start_time": "03:00", "weekly_days": ["TUE", "THU"],
+      "frequency": "gold-weekly", "expect": "2026-09-17T03:00:00Z"
+    },
+    {
+      "why": "Exactly on the Thursday slot: the slot is at-or-before now, so it is the current one (the tick at 03:00 dispatches).",
+      "now": "2026-09-24T03:00:00Z", "start_time": "03:00", "weekly_days": ["TUE", "THU"],
+      "frequency": "gold-weekly", "expect": "2026-09-24T03:00:00Z"
+    },
+    {
+      "why": "One minute before the Thursday slot: still Tuesday's. An early tick must not pull Thursday's run forward.",
+      "now": "2026-09-24T02:59:00Z", "start_time": "03:00", "weekly_days": ["TUE", "THU"],
+      "frequency": "gold-weekly", "expect": "2026-09-22T03:00:00Z"
+    },
+    {
+      "why": "Week boundary: a Sunday slot at 23:50 seen from Monday 00:05 is five minutes back, not a week.",
+      "now": "2026-09-28T00:05:00Z", "start_time": "23:50", "weekly_days": ["SUN"],
+      "frequency": "gold-weekly", "expect": "2026-09-27T23:50:00Z"
+    },
+    {
+      "why": "Day tokens are case-insensitive and duplicates are harmless: [\"thu\", \"THU\", \"tue\"] is Tue+Thu.",
+      "now": "2026-09-25T12:00:00Z", "start_time": "03:00", "weekly_days": ["thu", "THU", "tue"],
+      "frequency": "gold-weekly", "expect": "2026-09-24T03:00:00Z"
+    }
+  ]
+}

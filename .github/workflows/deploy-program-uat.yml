@@ -1,0 +1,130 @@
+name: Deploy program — UAT
+
+# Promotes program's gold ARTEFACTS and its pipeline CONFIG into uat.
+#
+# WHAT THIS DOES NOT DO, and why that is not an omission: there is no Terraform
+# step. program has no domain Terraform root — infrastructure/terraform holds
+# only a README — because since ADR-0018 the gold pipeline, its Glue jobs and
+# its Lambdas are owned by the ECHO STACK, and a domain owns its schema,
+# mapping and event delivery. So the whole of this domain's uat deployment is:
+# put the artefacts where the stack's jobs read them, and register the pipeline.
+#
+# Nor does it upload Glue scripts. Product uploads its own; the shared gold
+# scripts are the stack's, promoted by promote-echo.yml.
+#
+# DISPATCH ONLY. A uat deploy is a decision, so there is no push trigger — the
+# dev workflow has one, this deliberately does not.
+#
+# THE CONFIG STEP IS THE POINT. sync_pipelines.py writes the gold config table,
+# which is what makes the pipeline exist for the dispatcher.
+#
+# IT DOES NOT CREATE THE GLUE DATABASE. The FIRST TRANSFORM RUN creates it, and
+# a LATER sync applies the uif-echo-gold-layer Lake Formation tag -- until then
+# the sync prints `SKIP <db> (not created yet)`, which is correct behaviour and
+# not a failure. An earlier version of this comment claimed the sync auto-creates
+# the database; that is the API's create_gold_pipeline path, not this one.
+#
+# The pipeline lands DISABLED: overlays/uat commits `enabled: false`, because
+# `enabled` is console-owned (sync_pipelines.RUNTIME_PATHS, UIFPE-564) and uat's
+# schedule-gold-dispatch-tick rule is already live — seeding it true would start
+# runs at the next due slot with nobody watching. Enable it from the Syncs page.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-program-uat
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to uat (${{ github.ref_name }})
+    # THE REF MUST BE A RELEASE TAG, and this is not a style choice: the
+    # `uat` environment's deployment policy admits only tags, with NO branch
+    # entries, so a dispatch on develop is refused by the environment. The
+    # previous branch guard therefore made this workflow unrunnable — a tag
+    # dispatch skipped the job and a branch dispatch was rejected, with no ref
+    # satisfying both (UIFPE-656). Dispatch on the tag that
+    # program-release.yml cut, which is also what pins the deployed version.
+    if: startsWith(github.ref, 'refs/tags/program/v')
+    runs-on: ubuntu-latest
+    # The `uat` environment carries the reviewer gate — the run waits for an
+    # approval before any step executes.
+    environment: uat
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: uat
+    steps:
+      - uses: actions/checkout@v4
+
+      # A latch of its OWN, not PROGRAM_DEPLOY_ENABLED: that variable is the
+      # DEV latch and is already 'true', so sharing it left uat effectively
+      # unlatched. PROGRAM_UAT_DEPLOY_ENABLED is unset, so this fails closed.
+      # Unset (the default) evaluates to != 'true', so the latch fails CLOSED.
+      # Turn it off again after the deploy window: left on, every future
+      # dispatch deploys without anyone deciding to.
+      - name: Cutover latch
+        if: vars.PROGRAM_UAT_DEPLOY_ENABLED != 'true'
+        run: |
+          echo "::error::Deploys are latched OFF (repo variable PROGRAM_UAT_DEPLOY_ENABLED != 'true')."
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: |
+          pip install boto3 pyyaml jsonschema sqlparse
+          pip install -r domains/program/qe/requirements-dev.txt
+
+      # Test gate BEFORE any credential is assumed. Program's domain-local
+      # gates plus the shared, fail-closed artifact validation — the same
+      # script product's workflow calls, so a drifted manifest cannot reach
+      # uat's S3.
+      - name: Test gate
+        run: |
+          python3 -m pytest domains/program/qe -q
+          python3 stacks/echo/src/apps/cli/validate_gold_schemas.py --domain program
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # AWS_ROLE_ARN_ECHO_UAT, not AWS_ROLE_ARN_UAT. The latter is a
+          # repo-level secret holding the APICURIO uat role, and assuming it
+          # here fails on the first S3 call: "uif-apicurio-uat-deploy-role is
+          # not authorized to perform s3:ListBucket on uif-echo-uat-gold-artifacts".
+          # A domain uat deploy writes echo resources -- the gold artefacts
+          # bucket and the gold pipeline config table -- so it needs echo's uat
+          # role, which is what promote-echo.yml assumes for the same estate.
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ECHO_UAT }}
+          aws-region: eu-west-1
+
+      # PER-ENTITY --delete, never the shared prefix (UIFPE-117) — the
+      # destination is shared by every gold domain.
+      - name: Sync schema + mapping artifacts
+        run: |
+          for d in domains/program/src/schemas/gold/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/schemas/gold/$entity" --delete
+          done
+          for d in domains/program/src/schemas/mapping/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/mappings/$entity" --delete
+          done
+
+      # KNOWN NOISE (UIFPE-121 open item): one run covers ONE domain's pipelines
+      # directory while the config table is SHARED, so this run lists the other
+      # domains' pipelines as UNMANAGED. Noise, not damage — sync never deletes
+      # unmanaged items. --repo-root scopes the read, not the scan.
+      - name: Sync pipeline configs (config-as-code)
+        run: |
+          python3 stacks/echo/src/apps/cli/sync_pipelines.py \
+            --env "$ENV" --repo-root domains/program/src/apps --apply
+
+      - name: Summary
+        run: |
+          echo "::notice::program gold artefacts + pipeline config deployed to $ENV. The pipeline is registered but DISABLED — enable it from the Syncs page when someone can watch the first run. Verify: the gold config row exists and the artefacts the config points at are in s3://uif-echo-uat-gold-artifacts/. Do NOT expect uif_echo_uat_gold_program yet -- the first transform run creates it and a later sync tags it, so `SKIP ... (not created yet)` above is correct. An entity whose schema changed non-additively must be dispatched with --rebuild first; scheduled runs refuse a non-additive change by design."

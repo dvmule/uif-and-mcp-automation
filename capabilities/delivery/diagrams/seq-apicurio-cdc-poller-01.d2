@@ -1,0 +1,29 @@
+shape: sequence_diagram
+
+O: "Oracle\nsource system" { style: { fill: "#ede7f6"; stroke: "#4527a0"; stroke-width: 2; font-size: 16 } }
+P: "cdc-poller\nSOURCE ABSENT" { style: { fill: "#fce4ec"; stroke: "#c62828"; stroke-width: 3; font-size: 16 } }
+B: "BFF\ndelivery-lab routes" { style: { fill: "#e8f5e9"; stroke: "#2e7d32"; stroke-width: 2; font-size: 16 } }
+S: "SSM\nParameter Store" { style: { fill: "#e0f2f1"; stroke: "#00695c"; stroke-width: 2; font-size: 16 } }
+U: "UI\nProduct tab" { style: { fill: "#e3f2fd"; stroke: "#1565c0"; stroke-width: 2; font-size: 16 } }
+
+unreachable: {
+  label: "unreachable today - there is no poller"
+  style: { fill: "#fce4ec"; stroke: "#c62828"; stroke-width: 2; font-size: 15 }
+  P -> O: "poll past the watermark" { style.font-size: 15 }
+  O -> P: "rows, with deliberate overlap" { style: { stroke-dash: 3; font-size: 15 } }
+  P -> B: "GET /tables - what should I poll" { style.font-size: 15 }
+  B -> P: "table config" { style: { stroke-dash: 3; font-size: 15 } }
+  P -> B: "POST /metrics - rows and new watermark" { style.font-size: 15 }
+  P -> B: "POST /services/register - heartbeat" { style.font-size: 15 }
+}
+
+operator: {
+  label: "works today - the operator half"
+  style: { fill: "#e8f5e9"; stroke: "#2e7d32"; stroke-width: 2; font-size: 15 }
+  U -> B: "GET /pipeline, GET /tables/state" { style.font-size: 15 }
+  B -> S: "read the CDC table configuration" { style.font-size: 15 }
+  S -> B: "tables" { style: { stroke-dash: 3; font-size: 15 } }
+  B -> U: "totals per table, watermark state" { style: { stroke-dash: 3; font-size: 15 } }
+  U -> B: "PUT or DELETE a watermark" { style.font-size: 15 }
+  B -> S: "PUT the table configuration" { style.font-size: 15 }
+}

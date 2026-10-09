@@ -1,0 +1,36 @@
+# Runtime dependencies for the Echo stack.
+#
+# VERSIONS ARE DELIBERATELY UNPINNED. uif-relay-echo never carried a
+# requirements.txt — dependencies were baked into the four Lambda layer zips and
+# whatever the Glue image provided. This file is derived from the actual imports
+# in src/, so the package list is accurate, but pinning a version here would mean
+# inventing one. Confirm each against the deployed layers, then pin with `==` to
+# match stacks/beacon/src/requirements.txt.
+#
+# NOT listed, and deliberately so:
+#   awsglue, pyspark   provided by the Glue runtime; only imported under
+#                      src/apps/pipeline/, never by the Lambdas or the tests
+#   boto3, botocore    provided by the Lambda runtime
+#
+# Both of the below are imported under try/except in pipeline_controller.py, so
+# the API degrades rather than failing when a layer is absent.
+
+# Oracle client — the uif-echo-dev-oracle-layer.
+# WARNING: the 127 MB Oracle Instant Client that backs this layer is a licensed
+# vendor download, is NOT in git, and cannot be rebuilt from this repo. See
+# CHECKLIST.md before any clean rebuild of that layer.
+oracledb
+
+# GCP — the gcs and bq layers. google.cloud, google.oauth2, google.api_core.
+google-cloud-storage
+google-cloud-bigquery
+google-auth
+
+# Gold mapping manifests are YAML; the Gold Glue job reads them directly.
+PyYAML
+
+# Avro handling in the schema/publish path.
+fastavro
+
+# Apicurio Schema Registry publishing (src/apps/cli/publish.sh and callers).
+requests

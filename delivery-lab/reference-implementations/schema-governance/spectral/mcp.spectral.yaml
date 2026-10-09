@@ -1,0 +1,66 @@
+# Spectral ruleset for agent (MCP tool manifest) contracts.
+# Naming/annotation rules this enforces come from ../../../../capabilities/mcp/guidelines.md;
+# the registry-coordinate rule comes from ../../../../stacks/apicurio/standards/guidelines.md §1.
+rules:
+  uif-registry-coordinate-required:
+    description: Every registered manifest must declare its Apicurio group:artifact coordinate.
+    message: "{{error}} — add an x-registry block with group, artifact, compatibility."
+    severity: error
+    given: "$"
+    then:
+      field: x-registry
+      function: truthy
+
+  uif-server-name-format:
+    description: One server per bounded capability, named <domain>-mcp-server (capabilities/mcp/guidelines.md §1).
+    message: "server.name '{{value}}' must match <domain>-mcp-server"
+    severity: error
+    given: "$.server.name"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^[a-z][a-z0-9-]*-mcp-server$"
+
+  uif-tool-name-snake-case-verb-first:
+    description: Tool names are snake_case, verb-first (capabilities/mcp/guidelines.md §1).
+    message: "tools[*].name '{{value}}' must be snake_case and verb-first"
+    severity: error
+    given: "$.tools[*].name"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^[a-z][a-z0-9_]*$"
+
+  uif-schema-must-be-ref-never-inline:
+    description: inputSchema/outputSchema must $ref an already-registered API or event schema — never a second, drifting copy (capabilities/mcp/guidelines.md §2).
+    message: "tools[*].{{property}} must be a $ref, not an inline schema definition."
+    severity: error
+    given: "$.tools[*].[inputSchema,outputSchema]"
+    then:
+      field: $ref
+      function: truthy
+
+  uif-annotations-mandatory:
+    description: All four MCP tool annotations are mandatory, not decoration (capabilities/mcp/guidelines.md §2).
+    message: "tools[*] is missing a required annotation."
+    severity: error
+    given: "$.tools[*].annotations"
+    then:
+      - field: readOnlyHint
+        function: defined
+      - field: destructiveHint
+        function: defined
+      - field: idempotentHint
+        function: defined
+      - field: openWorldHint
+        function: defined
+
+  uif-transport-declared:
+    description: Transport is declared, not assumed (capabilities/mcp/guidelines.md §2).
+    message: "server.transport must be stdio or streamable-http."
+    severity: error
+    given: "$.server.transport"
+    then:
+      function: enumeration
+      functionOptions:
+        values: [stdio, streamable-http]

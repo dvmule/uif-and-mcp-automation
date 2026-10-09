@@ -1,0 +1,20 @@
+# Test-only dependencies for the control_panel suite.
+#
+# Install the runtime deps FIRST or collection fails with ModuleNotFoundError —
+# the tests import through the app:
+#     pip install -r stacks/echo/src/requirements.txt
+#     pip install -r stacks/echo/qe/control_panel/requirements-dev.txt
+#
+# Same ordering rule as stacks/beacon/qe/control_panel/requirements-dev.txt.
+#
+# Versions unpinned for the same reason as src/requirements.txt: relay-echo
+# carried no dev-dependency file, so a pin here would be invented rather than
+# read. Pin once confirmed.
+
+pytest
+
+# AWS mocking. test_dq_check_controller.py and test_lineage_dq.py import it
+# directly; without it those two modules fail at collection. This was already
+# true in relay-echo, which had no dev-requirements file at all — the dependency
+# was simply undeclared.
+moto

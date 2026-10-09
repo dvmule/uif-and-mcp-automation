@@ -1,0 +1,367 @@
+name: Release echo
+
+# Cuts the build tag echo/vX.Y.Z when stacks/echo/VERSION changes on develop.
+# Adopts the model stacks/apicurio proved: capabilities/delivery/stack-promotion-model.md
+#
+# WHY THIS POLLS FOR THE GATE INSTEAD OF USING workflow_run. A workflow_run
+# trigger only fires for workflow files that live on the DEFAULT branch, and
+# main is ~1,119 commits behind develop with 4 of 33 workflows on it. Polling
+# is correct here for as long as main stays behind.
+#
+# WHY A BUILD TAG'S EVIDENCE IS THE CI GATE AND NOT SMOKE. A build tag answers
+# "what code went into this artifact", so its evidence is the stacks-ci gate. A
+# release tag answers "what was deployed, where, when", so its evidence is
+# smoke. Deploying is not this workflow's job.
+#
+# WHAT IS BUILT HERE, AND WHAT IS NOT:
+#
+#   built    14 Lambda zips -- 5 for the silver/control-plane root and 9 for
+#            the GOLD root (UIFPE-576) -- staged from source lists and zipped
+#            deterministically (scripts/zip-artifact.sh), and the UI bundle.
+#            Gold is part of THIS release unit, not a separate one: `gold` is
+#            a {layer} in the naming vocabulary and not a {stack}, and the
+#            promotion model is stack-scoped. One of the 14, compile_preview,
+#            is staged from a pip-built TREE rather than a file list, which is
+#            why the build step below exists.
+#   copied   27 Glue scripts and libraries, uploaded at their own content
+#            hash -- 18 for the silver/control-plane root and 9 for the GOLD
+#            root (UIFPE-576 phase 1b). Before that the gold root uploaded
+#            its own from the repo at apply time, which is a build, and a
+#            promoted environment must not build.
+#   hashed   4 Lambda layers, read from S3 and NOT rebuilt. Their Makefile
+#            targets end in `zip -qr`, which embeds mtimes, and a pip tree is
+#            not reliably byte-stable (RECORD, __pycache__) -- so a rebuild
+#            would produce a new hash for unchanged pins and break the
+#            reproducibility the promotion claim rests on. A layer changes only
+#            when its pinned dependency version changes, which is a deliberate
+#            act: rebuild and re-upload it outside the release cycle, then cut
+#            a tag. This is the same treatment apicurio gives its registry
+#            image -- third-party, not built, pinned by hash.
+#
+# ARTIFACT IDENTITY is the content hash, and the S3 key IS that hash. Nothing
+# is stored at a mutable key, because Glue's script_location takes a plain
+# s3:// URI with no version-id parameter -- a fixed key would make every past
+# release's recorded identity silently change on the next deploy.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "stacks/echo/VERSION"
+      # This file's own path is deliberately NOT listed. stacks-ci.yml lists
+      # itself because it IS the gate and has to test itself; running THIS
+      # workflow is not a test of it -- a push changing only this file carries
+      # no VERSION bump, so check-version.sh correctly refuses with "tag
+      # already exists" and produces a spurious red run on every edit.
+      # workflow-lint validates this file instead.
+  workflow_dispatch:
+
+concurrency:
+  group: release-echo
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+  COMPONENT: echo
+  ENV: dev
+  # The release-artifacts bucket for the uif-echo-dev stack. Hardcoded for the
+  # same reason deploy-uif-echo-dev.yml hardcodes names: reading it back from
+  # `terraform output` would mean an init against remote state purely to learn
+  # a string this file can state. If it changes in s3.tf, change it here.
+  BUCKET: uif-echo-dev-release-artifacts
+
+jobs:
+  validate:
+    name: Validate the declared version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and tags: check-version.sh compares against every
+          # existing echo/v* tag, and a shallow clone has none of them.
+          fetch-depth: 0
+
+      - name: Check VERSION
+        id: check
+        run: |
+          set -euo pipefail
+          tag="$(stacks/echo/scripts/check-version.sh stacks/echo/VERSION)"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "::notice::Releasing ${tag}"
+
+  gate:
+    name: Require a green stacks-ci gate on this commit
+    needs: [validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.poll.outputs.run_id }}
+      conclusion: ${{ steps.poll.outputs.conclusion }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # WHICH COMMIT'S GATE RUN IS EVIDENCE ABOUT THIS ONE.
+      #
+      # stacks-ci.yml is path-filtered on `stacks/**` and its own file, so a
+      # commit touching neither produces NO run at all -- not a pending one,
+      # not a failed one, nothing. A VERSION bump DOES touch stacks/, so the
+      # ordinary case resolves to this commit; the walk matters when a release
+      # is cut from a HEAD carrying a later docs-only or workflow-only commit.
+      #
+      # The evidence commit is the nearest first-parent ancestor that touched
+      # the scanned paths. Because no first-parent commit between it and HEAD
+      # touched them, the two trees are identical under stacks/, so its verdict
+      # is a statement about this commit's stack content too. That equivalence
+      # is the whole justification, so it is VERIFIED below rather than
+      # asserted -- if the trees differ, this exits instead of accepting
+      # evidence about different code.
+      - name: Resolve which commit carries the stack evidence
+        id: evidence
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          evidence="$(git rev-list --first-parent -n 1 "$SHA" -- stacks/ .github/workflows/stacks-ci.yml || true)"
+          if [ -z "$evidence" ]; then
+            echo "::error::No ancestor of ${SHA} has ever touched stacks/ or stacks-ci.yml, so there is no gate evidence to find. This is not a releasable commit."
+            exit 1
+          fi
+          if [ "$evidence" != "$SHA" ]; then
+            if ! git diff --quiet "$evidence" "$SHA" -- stacks/; then
+              echo "::error::${SHA} differs from ${evidence} under stacks/, but only ${evidence} has a gate run. The --first-parent walk that picked it is therefore wrong for this history, and accepting its verdict would be evidence about different code. Refusing."
+              exit 1
+            fi
+            echo "::notice::${SHA} touches no stack, so its gate evidence is ${evidence}, the nearest first-parent commit that does. Verified identical under stacks/."
+          fi
+          echo "sha=${evidence}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the stacks-ci gate to conclude
+        id: poll
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.evidence.outputs.sha }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 1800 ))
+          run_id=""
+
+          while :; do
+            if [ -z "$run_id" ]; then
+              run_id="$(gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/stacks-ci.yml/runs?head_sha=${SHA}" \
+                --jq '[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty' || true)"
+            fi
+
+            if [ -n "$run_id" ]; then
+              # The gate JOB, not the run's overall conclusion: validate-sif is
+              # continue-on-error, so a run can conclude success while the
+              # aggregating gate job is what actually decides.
+              row="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" \
+                --jq '[.jobs[] | select(.name == "stacks-ci gate")] | last // {}
+                      | [(.status // ""), (.conclusion // "")] | @tsv' || true)"
+              status="$(printf '%s' "$row" | cut -f1)"
+              conclusion="$(printf '%s' "$row" | cut -f2)"
+
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" != "success" ]; then
+                  echo "::error::stacks-ci gate concluded '${conclusion}' on ${SHA} (run ${run_id}). A build tag is evidence the gate passed, so no tag will be created."
+                  exit 1
+                fi
+                echo "run_id=${run_id}"         >> "$GITHUB_OUTPUT"
+                echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
+                echo "::notice::stacks-ci gate passed on ${SHA} (run ${run_id})."
+                exit 0
+              fi
+              echo "gate is '${status:-queued}' in run ${run_id}; waiting."
+            else
+              echo "no stacks-ci run for ${SHA} yet; waiting."
+            fi
+
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out after 30 minutes waiting for the stacks-ci gate on ${SHA}. If stacks-ci did not run for this commit, check its path filters cover the files this commit touched."
+              exit 1
+            fi
+            sleep 20
+          done
+
+  artifacts:
+    name: Build, hash and stage the 46 artifacts
+    needs: [validate, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: stacks/echo
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: stacks/echo/ui/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ONE script stages the Glue scripts, the Lambda zips and the layers, and
+      # the dev deploy calls the same one
+      # (infrastructure/deploy/_uif-echo-deploy-common.sh). The artifact set is
+      # defined once: written twice it drifts, and the failure is invisible --
+      # a function whose source list is stale ships without a module it
+      # imports, which fails at RUNTIME, not at apply.
+      #
+      # The UI bundle is staged separately below, because it needs a node
+      # toolchain and has a different failure mode from hashing a file that
+      # already exists.
+      # compile_preview's artifact is a pip-built TREE (sqlglot beside the
+      # handler), so it has to exist before stage-artifacts.sh can hash and
+      # zip it -- lambda_zip_tree refuses rather than staging an empty
+      # directory, which would ship a function that cannot import anything.
+      # The tree is content-reproducible, so this does not break the
+      # identical-digest property the promotion claim rests on.
+      - name: Build the compile_preview tree
+        run: make -C infrastructure/terraform-gold build-preview
+
+      - name: Stage the 45 non-UI artifacts
+        run: |
+          set -euo pipefail
+          scripts/stage-artifacts.sh \
+            --bucket "$BUCKET" \
+            --layer-source-bucket uif-echo-dev-data \
+            --tsv /tmp/artifacts.tsv
+
+      # No VITE_API_URL and no Terraform read: the API origin arrives at
+      # runtime in config.json, so this build needs neither AWS nor an existing
+      # deployment. That is what makes the bundle ONE promotable artifact
+      # rather than one per environment. config.json is excluded from both the
+      # hash and the archive -- it is environment state, written by the publish
+      # step from the target environment's own api_endpoint.
+      - name: UI bundle
+        run: |
+          set -euo pipefail
+          npm --prefix ui ci
+          npm --prefix ui run build
+          sha="$(scripts/artifact-hash.sh ui/dist --exclude config.json)"
+          tar --exclude=./config.json -czf "/tmp/${sha}.tar.gz" -C ui/dist .
+          key="ui/${sha}.tar.gz"
+          # Same upload rule stage-artifacts.sh applies: content-addressed, so
+          # an object already at this key IS this bundle. head-object first and
+          # skip the upload; read the version id back either way, so what is
+          # recorded is the object actually there.
+          if aws s3api head-object --bucket "$BUCKET" --key "$key" >/dev/null 2>&1; then
+            echo "  = ${key} already present, not re-uploaded"
+          else
+            aws s3api put-object --bucket "$BUCKET" --key "$key"               --body "/tmp/${sha}.tar.gz" >/dev/null
+            echo "  + ${key} uploaded"
+          fi
+          vid="$(aws s3api head-object --bucket "$BUCKET" --key "$key"                    --query VersionId --output text)"
+          [ -n "$vid" ] && [ "$vid" != "None" ]             || { echo "::error::${key} has no S3 version id — versioning is off on ${BUCKET}."; exit 1; }
+          printf 'ui_bundle\tui_bundle\t-\t%s\t%s\t%s\t-\t-\n' \
+            "$sha" "$key" "$vid" >> /tmp/artifacts.tsv
+          echo "::notice::UI bundle ${sha} staged"
+
+      - name: Summarise and hand the artifact file on
+        run: |
+          set -euo pipefail
+          rows="$(grep -c . /tmp/artifacts.tsv)"
+          # 46, not 45: stage-artifacts.sh writes 45 rows and asserts that itself,
+          # then the UI step above appends the 46th. Keep BOTH numbers moving
+          # together. This gate has been wrong twice: 26 while the script wrote
+          # 26+1, failing every release, and 27 while gold's Lambdas took the
+          # script to 35. qe/pipeline/test_lambda_artifact_sets.py now derives
+          # both numbers from the calls that actually stage an artifact.
+          [ "$rows" -eq 46 ] \
+            || { echo "::error::expected 46 artifact rows, got ${rows}. A missing artifact would produce a manifest that under-describes the release."; exit 1; }
+          cut -f1 /tmp/artifacts.tsv | sort | uniq -c | sed 's/^/  /'
+          cp /tmp/artifacts.tsv "${RUNNER_TEMP}/artifacts.tsv"
+
+      # The artifact file carries no secret -- hashes, keys and version ids of
+      # objects the deploy role can already list. It crosses a job boundary,
+      # which is why it is uploaded at all.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifact-index
+          path: ${{ runner.temp }}/artifacts.tsv
+          retention-days: 1
+
+  tag:
+    name: Cut the build tag
+    needs: [validate, gate, artifacts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifact-index
+          path: ${{ runner.temp }}
+
+      - name: Assemble the release manifest
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          GIT_COMMIT: ${{ github.sha }}
+          GATE_RUN_ID: ${{ needs.gate.outputs.run_id }}
+          GATE_CONCLUSION: ${{ needs.gate.outputs.conclusion }}
+          BUCKET: ${{ env.BUCKET }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_FILE="${RUNNER_TEMP}/artifacts.tsv" \
+            stacks/echo/scripts/release-manifest.sh > /tmp/manifest.yaml
+          cat /tmp/manifest.yaml
+
+      - name: Create and push the annotated tag
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Annotated, with the manifest as the message: the tag and its
+          # evidence are then one object, readable offline with
+          # `git show echo/vX.Y.Z` and impossible to separate.
+          git tag -a "$TAG" -F /tmp/manifest.yaml
+          git push origin "refs/tags/${TAG}"
+          echo "::notice::Tagged ${TAG}"
+
+      - name: Mirror it to a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # gh, not a third-party release action: only actions, github,
+          # hashicorp, aws-actions, aquasecurity, sonarsource, opentofu and
+          # pearson* pass the enterprise allow-list, and one disallowed uses:
+          # fails the whole workflow at startup with no job logs.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/manifest.yaml \
+            --target "${GITHUB_SHA}"
+          echo "::notice::Release ${TAG} published."

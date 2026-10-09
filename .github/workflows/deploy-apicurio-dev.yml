@@ -1,0 +1,1101 @@
+name: Deploy apicurio — Dev
+
+# Deploys the WHOLE Apicurio stack to dev, in three independently gated parts:
+#
+#   INFRA      Terraform (stacks/apicurio/infrastructure/terraform/): ECS
+#              Fargate cluster, registry service + internal ALB, RDS Postgres,
+#              the BFF service behind its own internal ALB, the public API
+#              Gateway + Lambda authorizer, the UI bucket and its CloudFront
+#              distribution. Has an APP-ONLY mode (infra=app) that deploys the
+#              BFF alone -- see APICURIO_INFRA below and the assertion step's
+#              own comment.
+#   BFF IMAGE  docker build of stacks/apicurio/src/Dockerfile, CVE-scanned,
+#              pushed to this stack's ECR repository tagged with the commit
+#              sha, and its digest handed to Terraform. Built automatically on
+#              any merge touching stacks/apicurio/src/.
+#   UI         stacks/apicurio/ui/ built with `npm ci && npm run build`, synced
+#              to the stack's own UI bucket, then a CloudFront invalidation.
+#
+# The three gates are separate on purpose: gating the UI on the Terraform
+# action would mean applying Terraform unattended just to ship a UI change.
+#
+#   SMOKE      QE tier 2 (DEPLOY-DEV.md Phase 5): both ECS services reach a
+#              steady state, /api/v1/health reports "up" through the public API
+#              Gateway, and qe/tests/integration runs against it. Verifies the
+#              deployment; changes nothing.
+#
+# The qe/ UNIT suite is NOT gated here — it runs in stacks-ci.yml on pull
+# requests. The INTEGRATION tier is the opposite: it cannot run there at all,
+# because the ALBs are internal and a pull-request runner cannot reach them, so
+# the smoke job below is the only place it executes.
+#
+# REPO VARIABLES (Settings -> Secrets and variables -> Actions -> Variables)
+#   APICURIO_INFRA       unset|skip = no Terraform (default)
+#                        plan       = terraform plan only, changes nothing
+#                        apply      = apply the plan this run produced
+#                        app        = APP-ONLY deploy: plan, prove the plan
+#                                     touches nothing but the BFF task
+#                                     definition and service, then apply it.
+#                                     Refuses if any platform resource is
+#                                     pending. This is how an API change ships
+#                                     without re-planning RDS to move a Python
+#                                     file, and unlike `apply` it is safe to
+#                                     leave on, because it proves its own blast
+#                                     radius before applying.
+#   APICURIO_BFF_IMAGE   unset      = AUTO: build when the push changed
+#                                     stacks/apicurio/src/, otherwise skip
+#                        build      = always build + push
+#                        skip       = never build
+#
+# APICURIO_BFF_IMAGE is NOT a deploy-window latch, unlike APICURIO_INFRA and
+# APICURIO_UI. Building changes nothing about what is running -- the task
+# definition pins a digest, and only an apply can move it -- and this is the
+# only place the image is built and CVE-scanned at all, since qe/ci.sh cannot
+# do either on a pull request (no ECR credentials for the SIF base).
+#   APICURIO_UI          unset|skip = no UI deploy (default)
+#                        deploy     = build the bundle, sync it, invalidate
+#   APICURIO_SMOKE       unset|run  = run the post-deploy smoke checks (DEFAULT)
+#                        skip       = do not verify the deployment
+#
+# APICURIO_SMOKE defaults ON, unlike the three above. They change the
+# environment, so their safe default is off; the smoke job only reads it, and a
+# verification you have to remember to enable is one nobody enables.
+#
+# Set the variable(s), then either push to develop or hit "Re-run all jobs" on
+# the most recent run — variables are read at run time, so a re-run picks up a
+# new value with no new commit. workflow_dispatch inputs do the same job
+# per-run (safer: no standing setting) once this file reaches main.
+#
+# !! Leave APICURIO_INFRA unset (or 'skip') outside a deploy window. Left on
+# 'apply', every push touching stacks/apicurio/** applies Terraform
+# unattended, with no human reading the plan first — same discipline
+# deploy-beacon-dev.yml documents for BEACON_INFRA. The same goes for
+# APICURIO_BFF_IMAGE and APICURIO_UI: left on, every push rebuilds and
+# republishes. The variables are a deploy-window latch, not configuration.
+#
+# NETWORK VALUES ARE IN PLACE. envs/dev.tfvars carries the real, surveyed
+# VPC/subnet/security-group ids for account 283556840805 (read live on
+# 2026-09-14), not placeholders, and `terraform plan` succeeds against them.
+# An earlier version of this comment said a plan was "NOT yet safe to run at
+# all" and named vpc-UPDATE-ME; that is no longer true. UNLIKE Beacon's stack,
+# those subnets are NOT interchangeable with others in the same VPC — see
+# envs/dev.tfvars's own comment for why.
+#
+# THAT SENTENCE IS SCOPED TO THE NETWORK VALUES, and as of 2026-09-14 a plan
+# no longer succeeds outright. The stack adopted the seven Pearson mandatory
+# resource tags, five of which come from the app's service record and have no
+# default on purpose, so `terraform plan -var-file=envs/dev.tfvars` refuses and
+# names t_app_id, t_cost_centre, t_dcl, t_owner_individual and
+# t_responsible_individuals. This is the guard working, not a regression: a
+# mandatory tag with a default is how an estate ends up confidently tagged with
+# the wrong value, and a wrong t_cost_centre misbills another team every month.
+# Supply them as -var arguments or in tfvars once the service record is read.
+#
+# ALMOST NOTHING HAS BEEN APPLIED -- but no longer nothing, and the difference
+# matters for anyone reasoning about a first run. On 2026-09-14 a single
+# resource was applied by hand with `-target`:
+# aws_ecr_repository.base_python, the mirror holding the SIF base image that
+# src/Dockerfile builds FROM. So the state object at
+# uif-apicurio/dev/terraform.tfstate DOES now exist and holds exactly that one
+# resource. There is still no UI bucket, no ECS cluster, no RDS instance and no
+# BFF ECR repository, and a full plan reports 68 to add / 0 to change /
+# 0 to destroy against that state. That near-greenfield state is why the
+# bff-image job
+# carries a one-time `-target` bootstrap (see the job's own comment) and why
+# the first apply has a manual second pass: cors_origins cannot name the
+# CloudFront domain until the distribution exists. stacks/apicurio/DEPLOY-DEV.md
+# Phase 4 is the runbook; this workflow implements Phase 2 of it.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "stacks/apicurio/**"
+      - ".github/workflows/deploy-apicurio-dev.yml"
+  workflow_dispatch:
+    inputs:
+      infra:
+        description: "Terraform action for the Apicurio stack"
+        type: choice
+        options: [plan, apply, app, skip]
+        default: plan
+      bff_image:
+        description: "Build and push the BFF container image"
+        type: choice
+        options: [build, skip]
+        default: skip
+      ui:
+        description: "Build and deploy the UI bundle"
+        type: choice
+        options: [deploy, skip]
+        default: skip
+      smoke:
+        description: "Run the post-deploy smoke checks (QE tier 2)"
+        type: choice
+        options: [run, skip]
+        default: run
+
+concurrency:
+  group: deploy-apicurio-dev
+  cancel-in-progress: false
+
+env:
+  ENV: dev
+  AWS_REGION: eu-west-1
+  # bff.tf: "${local.name}-bff-ecr-repo". Hard-coded here rather than read from
+  # `terraform output bff_ecr_repository_url`, because the bootstrap below has
+  # to ask whether the repository exists BEFORE any Terraform state exists to
+  # read an output from. If the name changes in bff.tf, change it here too.
+  ECR_REPO: uif-apicurio-dev-bff-ecr-repo
+
+  # ── The five Pearson mandatory tag values, as TF_VAR_* ────────────────────
+  # Terraform reads TF_VAR_<name> for any declared variable, so these supply
+  # t_app_id / t_cost_centre / t_dcl / t_owner_individual /
+  # t_responsible_individuals without committing them to envs/dev.tfvars. They
+  # are org facts from the app's ServiceNow service record, not per-branch
+  # config, so a repo variable is the one place to change them; envs/dev.tfvars
+  # keeps all five commented out.
+  #
+  # Declared at WORKFLOW level, not on the plan step. Two jobs run Terraform:
+  # the infra job plans and applies, and the bff-image job runs
+  # `terraform apply -target=aws_ecr_repository.bff` to bootstrap the registry.
+  # A required variable has to be present for BOTH or the bootstrap fails
+  # before the plan is ever reached. (The apply step itself needs none of them
+  # -- it applies a saved plan, and a saved plan cannot be given variables.)
+  #
+  # The suffix must match the Terraform variable name EXACTLY and is
+  # case-sensitive: the variable is `t_app_id`, so the env var is
+  # TF_VAR_t_app_id. TF_VAR_t_AppID would be silently ignored -- t_AppID is the
+  # AWS tag key, not the variable name.
+  #
+  # If a repo variable is unset, GitHub expands it to the empty string and
+  # Terraform treats that as a SET value of "". The failure is still loud, but
+  # it changes shape: "Invalid value for variable" from the variable's own
+  # validation rather than "No value for required variable". Both name the
+  # variable, so neither is silent -- worth knowing so the message is not
+  # mistaken for a bad value having been supplied on purpose.
+  # FOUR ARE ESTATE-WIDE, ONE IS PER-STACK, and the split is not arbitrary.
+  # T_APP_ID, T_COST_CENTRE, T_OWNER_INDIVIDUAL and T_RESPONSIBLE_INDIVIDUALS
+  # describe the organisation and are identical for every stack, so they are
+  # unprefixed repo variables that echo, beacon and harbor read unchanged --
+  # one place to change a cost centre or an escalation address for the whole
+  # estate instead of four that drift.
+  #
+  # t_dcl is prefixed APICURIO_ because a data classification level is a
+  # property of the DATA A STACK HOLDS, not of the organisation. Apicurio holds
+  # schema and registry metadata; a stack holding customer or HR records is a
+  # different level, and an estate-wide DCL would either overstate this stack's
+  # or understate that one's. Understating it is the dangerous direction: it
+  # exempts protected data from controls keyed off the tag.
+  TF_VAR_t_app_id: ${{ vars.T_APP_ID }}
+  TF_VAR_t_cost_centre: ${{ vars.T_COST_CENTRE }}
+  TF_VAR_t_dcl: ${{ vars.APICURIO_T_DCL }}
+  TF_VAR_t_owner_individual: ${{ vars.T_OWNER_INDIVIDUAL }}
+  TF_VAR_t_responsible_individuals: ${{ vars.T_RESPONSIBLE_INDIVIDUALS }}
+
+jobs:
+  # Same pattern as deploy-beacon-dev.yml's resolve job: one place decides what
+  # this run does, so the choice is visible in the log instead of hidden across
+  # a dozen `if:` expressions. Dispatch inputs win when present; otherwise the
+  # repo variables decide. Anything unrecognised is treated as skip — every
+  # latch fails closed.
+  resolve:
+    name: What this run will do (Apicurio stack)
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.mode.outputs.infra }}
+      image: ${{ steps.mode.outputs.image }}
+      ui: ${{ steps.mode.outputs.ui }}
+      smoke: ${{ steps.mode.outputs.smoke }}
+    steps:
+      # Needed only for the path check below, which decides whether this push
+      # touched the BFF's source. fetch-depth 0 because `github.event.before`
+      # can be outside a shallow clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Did this push touch the BFF's source?
+        id: touched
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base="$BEFORE"
+          if [ -z "$base" ] || ! git cat-file -e "$base" 2>/dev/null; then
+            base=$(git rev-parse "$SHA~1" 2>/dev/null || echo "$SHA")
+          fi
+          if git diff --name-only "$base" "$SHA" | grep -q '^stacks/apicurio/src/'; then
+            echo "src=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::This push changed stacks/apicurio/src/ — the BFF image will be built."
+          else
+            echo "src=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          SRC_TOUCHED: ${{ steps.touched.outputs.src }}
+          IN_INFRA: ${{ inputs.infra }}
+          IN_IMAGE: ${{ inputs.bff_image }}
+          IN_UI: ${{ inputs.ui }}
+          VAR_INFRA: ${{ vars.APICURIO_INFRA }}
+          VAR_IMAGE: ${{ vars.APICURIO_BFF_IMAGE }}
+          VAR_UI: ${{ vars.APICURIO_UI }}
+          IN_SMOKE: ${{ inputs.smoke }}
+          VAR_SMOKE: ${{ vars.APICURIO_SMOKE }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            infra="${IN_INFRA:-skip}"
+            image="${IN_IMAGE:-skip}"
+            ui="${IN_UI:-skip}"
+            # Defaults to `run`, unlike every other gate here. The others
+            # CHANGE the environment, so their safe default is off; this one
+            # only reads it, and a verification you have to remember to switch
+            # on is one nobody switches on.
+            smoke="${IN_SMOKE:-run}"
+            source="workflow_dispatch inputs"
+          else
+            infra="${VAR_INFRA:-skip}"
+            ui="${VAR_UI:-skip}"
+            smoke="${VAR_SMOKE:-run}"
+            source="repo variables"
+
+            # THE IMAGE GATE IS NO LONGER A LATCH. Building is safe -- it
+            # changes nothing about what is running, because the task
+            # definition pins a digest and only an apply can move it -- so
+            # there is no deploy window to protect, and the reasons to build
+            # every time are strong:
+            #
+            #   1. It is the only place the image gets built and CVE-scanned at
+            #      all. qe/ci.sh skips `docker build` and `trivy image` on a
+            #      pull request, because a PR runner cannot authenticate to the
+            #      private ECR mirror holding the SIF base. Building here on
+            #      merge is what restores that coverage.
+            #   2. A broken Dockerfile or an unbuildable dependency set is
+            #      found on the merge that caused it, not weeks later in
+            #      somebody's deploy window.
+            #   3. The digest is then already in ECR when a deploy is wanted.
+            #
+            # `skip` still forces it off and `build` still forces it on, so the
+            # variable keeps working for anyone who wants either; unset now
+            # means "decide from the diff" rather than "no".
+            case "${VAR_IMAGE:-auto}" in
+              build) image=build; source="$source (image forced on)" ;;
+              skip)  image=skip;  source="$source (image forced off)" ;;
+              *)
+                if [ "${SRC_TOUCHED:-false}" = "true" ]; then
+                  image=build
+                else
+                  image=skip
+                fi
+                ;;
+            esac
+          fi
+          case "$infra" in
+            plan|apply|app) ;;
+            *) infra=skip ;;
+          esac
+          case "$image" in
+            build) ;;
+            *) image=skip ;;
+          esac
+          case "$ui" in
+            deploy) ;;
+            *) ui=skip ;;
+          esac
+          case "$smoke" in
+            skip) ;;
+            *) smoke=run ;;
+          esac
+
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
+          echo "::notice::Resolved from $source — terraform: $infra, bff image: $image, ui: $ui, smoke: $smoke"
+
+          if [ "$infra" = "apply" ] && [ "$EVENT" != "workflow_dispatch" ]; then
+            echo "::warning::APICURIO_INFRA=apply on a $EVENT event — Terraform is applying with nobody reading the plan. Unset the variable after this deploy window. If what you actually want is to ship BFF code, use app instead: it applies only when the plan touches nothing but the task definition and service, and refuses otherwise."
+          fi
+          if [ "$infra" = "app" ]; then
+            echo "::notice::App-only deploy — the plan will be applied ONLY if it changes nothing outside the BFF task definition and service. A pending platform change stops this run instead of riding along."
+          fi
+          if [ "$infra" = "apply" ] && [ "$image" = "skip" ]; then
+            echo "::notice::Applying Terraform without building the BFF image — the apply will carry forward the digest the service is already running, so the image is a genuine no-op in this run. On a FIRST deploy there is nothing to carry forward and the infra job stops with an error rather than creating a service with an unpullable image, which is what the old ':latest' fallback used to do. Re-run with bff_image=build if this is the first deploy."
+          fi
+          if [ "$infra" = "skip" ] && [ "$image" = "skip" ] && [ "$ui" = "skip" ]; then
+            echo "::notice::Nothing to do. Set APICURIO_INFRA=plan|apply, APICURIO_BFF_IMAGE=build and/or APICURIO_UI=deploy, then re-run this workflow."
+          fi
+
+  # Runs BEFORE the infra job on purpose: on a greenfield account Terraform
+  # creates the (empty) ECR repository and the BFF ECS service in the same
+  # apply, so the service has no image to pull and sits failing while the apply
+  # reports success. The image has to be in the repository before the service
+  # is created, and the repository is itself Terraform's — hence the bootstrap
+  # below. See DEPLOY-DEV.md Phase 4, "order matters".
+  bff-image:
+    name: Build and push the BFF image
+    needs: resolve
+    if: needs.resolve.outputs.image == 'build'
+    runs-on: ubuntu-latest
+    # environment: dev + id-token: write are BOTH load-bearing on every job
+    # that assumes AWS credentials. echo-dev-github-actions' trust policy
+    # admits refs/heads/develop OR environment:dev; dropping either one breaks
+    # the OIDC trust match at runtime, on any branch other than develop.
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image_digest: ${{ steps.push.outputs.image_digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Only needed for the bootstrap step below. Pinned for the same reasons
+      # the infra job's copy is — see that step's comment.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      # ONE-TIME BOOTSTRAP, and deliberately narrow.
+      #
+      # `terraform apply -target=...` is an escape hatch, and Terraform prints
+      # its own warning about it for good reason: a targeted apply skips the
+      # rest of the configuration, so the resulting state does not correspond
+      # to the whole config and a later plan can surprise you. It is acceptable
+      # here for three specific reasons:
+      #   1. It is one resource with no dependents and no dependencies of its
+      #      own (aws_ecr_repository.bff derives only from var.env), so nothing
+      #      else is half-created by it.
+      #   2. It runs at most once per environment — the guard below makes it a
+      #      no-op the moment the repository exists.
+      #   3. The full apply in the infra job immediately reconciles everything
+      #      else, including the repository's lifecycle policy.
+      # This is NOT a pattern to reuse for ordinary changes.
+      #
+      # It applies Terraform, so it is allowed only on the apply path. If the
+      # repository is missing on a plan-only run this fails loudly instead of
+      # quietly creating AWS resources nobody asked for.
+      #
+      # Consequence worth knowing before you hit re-run: a failure here also
+      # stops the infra job (it requires this job not to have failed), so on a
+      # first deploy do NOT ask for image=build and infra=plan together — you
+      # get neither. Plan first with image=skip, read it, then run
+      # infra=apply + image=build. That is DEPLOY-DEV.md Phase 4's order
+      # anyway.
+      - name: Bootstrap the ECR repository if it does not exist
+        working-directory: stacks/apicurio/infrastructure/terraform
+        env:
+          INFRA: ${{ needs.resolve.outputs.infra }}
+        run: |
+          set -euo pipefail
+          if aws ecr describe-repositories --repository-names "$ECR_REPO" >/dev/null 2>&1; then
+            echo "$ECR_REPO already exists — no bootstrap needed."
+            exit 0
+          fi
+          if [ "$INFRA" != "apply" ]; then
+            echo "::error::$ECR_REPO does not exist and there is nowhere to push. Creating it means applying Terraform, which only the apply path may do — re-run with infra=apply (or APICURIO_INFRA=apply). If you are seeing this on an ordinary merge, the image gate is now AUTO and builds whenever stacks/apicurio/src/ changes, so this environment has simply never been applied; set APICURIO_BFF_IMAGE=skip to stop every such merge failing until it has been."
+            exit 1
+          fi
+          echo "::notice::$ECR_REPO does not exist — bootstrapping just that resource."
+          terraform init -reconfigure -input=false -backend-config=backends/dev.hcl
+          terraform apply -input=false -auto-approve -var-file=envs/dev.tfvars \
+            -target=aws_ecr_repository.bff
+
+      - uses: aquasecurity/setup-trivy@v0.3.1
+
+      - name: Build and push
+        id: push
+        working-directory: stacks/apicurio/src
+        run: |
+          set -euo pipefail
+          uri=$(aws ecr describe-repositories --repository-names "$ECR_REPO" \
+            --query 'repositories[0].repositoryUri' --output text)
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "${uri%%/*}"
+
+          # THE REPOSITORY IS IMMUTABLE, so the same tag can never be pushed
+          # twice. A re-run of this workflow on the same commit is routine --
+          # the run history is full of them -- and a blind `docker push` would
+          # fail it. So ask first: if this commit's image is already there,
+          # reuse the digest that is already there rather than rebuilding it.
+          # That is the correct behaviour for a content-addressed artifact, not
+          # a workaround: the same commit should not be able to produce two
+          # different images.
+          existing=$(aws ecr describe-images --repository-name "$ECR_REPO" \
+            --image-ids imageTag="$GITHUB_SHA" \
+            --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)
+
+          if [ -n "$existing" ] && [ "$existing" != "None" ]; then
+            echo "::notice::$GITHUB_SHA is already in $ECR_REPO as $existing — reusing it, not rebuilding."
+            digest="$existing"
+            # Still scanned, deliberately. The image was scanned when it was
+            # first pushed, but the vulnerability database has moved since, so
+            # a reused image gets the same gate against today's database. It is
+            # pushed already, so a finding here fails the deploy rather than
+            # the push -- which is the right outcome either way: it does not
+            # reach the service.
+            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+                        --skip-version-check "$uri@$digest"
+          else
+            # Tagged with the commit sha, which is what makes a deploy
+            # traceable afterwards. `latest` is NOT pushed any more: it was a
+            # fallback for the old bff_image_tag default, and that default is
+            # gone -- Terraform now takes a digest with no default at all, so
+            # there is nothing left for a moving tag to rescue, and a moving
+            # tag is exactly what let an infra-only apply repoint the running
+            # service.
+            docker build -f Dockerfile -t "$uri:$GITHUB_SHA" .
+
+            # Same gate qe/ci.sh runs, same flags, on purpose: this job is also
+            # reachable via workflow_dispatch (image=build), which bypasses the
+            # push/PR trigger that runs qe/ci.sh entirely. Without this, a
+            # manually-triggered build+push ships with no CVE gate at all. It
+            # runs BEFORE the push, so a finding blocks the push rather than
+            # reporting on an image already in the registry.
+            trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+                        --skip-version-check "$uri:$GITHUB_SHA"
+
+            docker push "$uri:$GITHUB_SHA"
+
+            # Read the digest back from the registry rather than computing it
+            # locally: what matters is what ECR stored, and the manifest ECR
+            # returns is the thing the task definition will pull.
+            digest=$(aws ecr describe-images --repository-name "$ECR_REPO" \
+              --image-ids imageTag="$GITHUB_SHA" \
+              --query 'imageDetails[0].imageDigest' --output text)
+          fi
+
+          if ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not resolve a digest for $GITHUB_SHA in $ECR_REPO (got '${digest:-<empty>}'). Terraform will not accept anything else, so stopping here rather than planning against a tag."
+            exit 1
+          fi
+
+          echo "image_digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "::notice::BFF image for $GITHUB_SHA is $uri@$digest"
+
+  infra:
+    name: Terraform ${{ needs.resolve.outputs.infra }} (Apicurio stack)
+    needs: [resolve, bff-image]
+    # `!cancelled()` rather than `always()`, and resolve must have SUCCEEDED:
+    # if resolve failed, its outputs are empty strings and `infra != 'skip'`
+    # would be true, applying Terraform with no decided mode. bff-image is
+    # allowed to be skipped (it is separately gated) but not to have failed —
+    # applying after a failed image build would deploy a task definition
+    # pointing at a tag that was never pushed.
+    if: >-
+      ${{ !cancelled()
+      && needs.resolve.result == 'success'
+      && needs.resolve.outputs.infra != 'skip'
+      && needs.bff-image.result != 'failure' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: stacks/apicurio/infrastructure/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Pinned, not `latest`. Two reasons, and the second is the sharp one:
+      #  - An unpinned action means a run's Terraform version changes under you
+      #    with no commit, which is the CI drift this repo pins provider
+      #    versions to avoid.
+      #  - Terraform 1.15.0 specifically validated `backend` block attributes
+      #    statically (hashicorp/terraform#38021), which fails `terraform
+      #    validate` on this module's partial backend config. Reverted in
+      #    1.15.1 (#38466, #38468). `latest` happens to be past it today; that
+      #    is luck, not a guarantee.
+      # Same pin as deploy-product-prod.yml and stacks-ci.yml. Keep the pin in
+      # the bff-image and ui jobs identical to this one: the saved plan below is
+      # only valid input to an apply from the same Terraform version, and a
+      # version skew between jobs is exactly the kind of drift the pin exists to
+      # stop.
+      #
+      # terraform_wrapper: false so `terraform output -raw` in command
+      # substitution returns the raw value, not the wrapper's decorated stdout.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      # -reconfigure: with `backend "s3" {}` plus -backend-config=backends/dev.hcl,
+      # a working directory remembers the last backend it was initialised
+      # against, and Terraform then OFFERS to copy that state into the new one —
+      # accepting writes one environment's state under another's key. -input=false
+      # makes it fail instead of asking. On a fresh CI checkout there is no
+      # .terraform to remember anything, so here this is near-theoretical; the
+      # flags cost nothing, and this file is also read as the reference for the
+      # same commands run locally, where the directory is NOT fresh.
+      - name: Init + validate
+        run: |
+          terraform init -reconfigure -input=false -backend-config=backends/dev.hcl
+          terraform validate
+
+      # The plan is saved and then APPLIED — see the apply step. Because a saved
+      # plan cannot be given variables at apply time, the image tag has to be
+      # baked in here.
+      # WHICH IMAGE DOES THIS APPLY RUN? Terraform now takes a digest and has
+      # no default, so this question has to be answered explicitly rather than
+      # falling through to a moving tag. Two legitimate answers:
+      #
+      #   1. An image was built in this run -> use that digest.
+      #   2. Nothing was built (an infra-only deploy: an RDS setting, a
+      #      security-group rule) -> keep running EXACTLY what the service is
+      #      already running, by reading the digest out of the live task
+      #      definition.
+      #
+      # Case 2 is what the old code got wrong. It let the plan fall back to
+      # envs/dev.tfvars' `bff_image_tag = "latest"`, so an unrelated infra
+      # change silently repointed the task definition from a pinned sha to a
+      # moving tag -- printed as an ordinary diff line, easy to approve, and a
+      # real change to what runs. Re-reading the current digest makes an
+      # infra-only apply a genuine no-op for the image.
+      #
+      # The task-definition family is hard-coded for the same reason ECR_REPO
+      # is: this has to work before there is any Terraform state to read an
+      # output from. If bff.tf's family changes, change it here too.
+      - name: Resolve the image digest this apply will deploy
+        id: image
+        env:
+          BUILT: ${{ needs.bff-image.outputs.image_digest }}
+          TASKDEF_FAMILY: uif-apicurio-dev-bff-task-definition
+        run: |
+          set -euo pipefail
+          if [ -n "$BUILT" ]; then
+            digest="$BUILT"
+            echo "::notice::Deploying the image built in this run: $digest"
+          else
+            current=$(aws ecs describe-task-definition \
+              --task-definition "$TASKDEF_FAMILY" \
+              --query 'taskDefinition.containerDefinitions[0].image' \
+              --output text 2>/dev/null || true)
+            digest="${current##*@}"
+            if ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+              echo "::error::No image was built in this run, and the digest currently deployed could not be read from task definition '$TASKDEF_FAMILY' (got '${current:-<nothing>}'). On a first deploy there is nothing to carry forward — re-run with bff_image=build so this run has an image to deploy. This used to fall back to ':latest', which is what made a first apply create a service with no pullable image."
+              exit 1
+            fi
+            echo "::notice::No image built in this run — carrying forward the digest already deployed: $digest"
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Plan
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          terraform plan -input=false -var-file=envs/dev.tfvars \
+            -var "bff_image_digest=$IMAGE_DIGEST" -out=tf.plan
+
+      # Applies the plan file produced one step above, instead of re-planning.
+      # Before this change the apply re-planned from scratch, so what got
+      # applied was not what anyone reviewed in the log (DEPLOY-DEV.md Phase 2).
+      #
+      # THREE CONSTRAINTS, all load-bearing:
+      #  1. Plan and apply stay in the SAME job — same runner, same filesystem,
+      #     nothing persisted between them. A saved plan is only valid for the
+      #     Terraform version that wrote it, and it must not leave the runner.
+      #  2. tf.plan is NEVER uploaded as an artifact, and `terraform show -json`
+      #     is never run into a log or an artifact. A saved plan contains every
+      #     generated value; `grep` finds nothing in it only because it is
+      #     compressed, while `terraform show -json` prints the lot in clear.
+      #     (RDS-managed credentials keep the DB password out of it, but
+      #     authorizer.tf still generates values.) This is the one reason this
+      #     workflow cannot use deploy-product-prod.yml's upload/download
+      #     plan-artifact shape.
+      #  3. No -auto-approve: it is not a valid pairing with a plan file, and
+      #     not needed — Terraform does not prompt when handed one.
+      # ── The app-only deploy, and why it needs no escape hatch ──────────────
+      #
+      # The problem: the BFF *is* the application, so shipping an API change is
+      # the routine case, and until now the only way to move one was a full
+      # apply of ~68 resources -- re-planning RDS to ship a Python file. The
+      # delivery guide's "three independently gated surfaces" was true of the
+      # GATES and false of the DEPLOYS.
+      #
+      # Both obvious fixes are wrong here:
+      #   - `aws ecs update-service --force-new-deployment` does nothing: the
+      #     task definition pins an immutable digest, so it re-pulls the same
+      #     image. A new image needs a new task-definition revision.
+      #   - `terraform apply -target=...` is what this workflow's own bootstrap
+      #     comment calls "NOT a pattern to reuse for ordinary changes", and it
+      #     re-plans, losing the property that what is applied is what was
+      #     reviewed.
+      #
+      # So this uses neither. If a FULL plan contains only application-layer
+      # changes, then applying that whole plan already IS an app-only deploy --
+      # no targeting required. This step proves that precondition and refuses
+      # when it does not hold.
+      #
+      # Three properties that follow:
+      #   1. No -target, so no exception to a documented rule, and none of
+      #      Terraform's "state may not correspond to the configuration" caveat.
+      #   2. The saved plan is applied unchanged, so "applied == reviewed" holds
+      #      exactly as on the apply path.
+      #   3. Platform drift becomes a STOP rather than a passenger. Today an
+      #      out-of-band infra change rides along unnoticed inside an unrelated
+      #      apply; here it blocks the deploy and names itself.
+      #
+      # READING THE PLAN SAFELY: constraint 2 in the comment above forbids
+      # `terraform show -json` reaching a log or an artifact, because a plan
+      # carries generated values in clear. It is piped straight into jq and only
+      # resource ADDRESSES are ever printed -- never the document, never a value.
+      - name: Assert the plan touches only the application layer
+        if: needs.resolve.outputs.infra == 'app'
+        run: |
+          set -euo pipefail
+          # The application layer: the two resources that change when only the
+          # image changes. Widening this list widens the blast radius of an
+          # unattended apply, so it is spelled out rather than pattern-matched.
+          allowed="aws_ecs_task_definition.bff aws_ecs_service.bff"
+
+          changed=$(terraform show -json tf.plan | jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) | .address')
+
+          if [ -z "$changed" ]; then
+            echo "::notice::Nothing to deploy — the plan is empty, so the running task definition already has this digest."
+            echo "do_apply=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "Plan changes:"
+          for addr in $changed; do echo "  $addr"; done
+
+          unexpected=""
+          for addr in $changed; do
+            case " $allowed " in
+              *" $addr "*) ;;
+              *) unexpected="$unexpected $addr" ;;
+            esac
+          done
+
+          if [ -n "$unexpected" ]; then
+            echo "::error::This plan changes platform resources, so it is not an app-only deploy and will NOT be applied unattended:$unexpected. That is either real infrastructure work or drift introduced out of band, and both need a human reading the plan. Re-run with infra=plan to read it, then infra=apply to apply it deliberately."
+            exit 1
+          fi
+
+          echo "::notice::App-only deploy confirmed — this plan changes nothing but the BFF task definition and service."
+          echo "do_apply=true" >> "$GITHUB_ENV"
+
+      - name: Apply the reviewed plan
+        if: >-
+          needs.resolve.outputs.infra == 'apply'
+          || (needs.resolve.outputs.infra == 'app' && env.do_apply == 'true')
+        run: terraform apply -input=false tf.plan
+
+      - name: Report the stack's URLs (apply only)
+        if: needs.resolve.outputs.infra == 'apply' || needs.resolve.outputs.infra == 'app'
+        run: |
+          set -euo pipefail
+          registry=$(terraform output -raw registry_url 2>/dev/null || echo "")
+          api=$(terraform output -raw bff_api_url 2>/dev/null || echo "")
+          ui=$(terraform output -raw ui_url 2>/dev/null || echo "")
+          echo "::notice::Apicurio Registry: ${registry:-<no output>} | BFF API: ${api:-<no output>} | UI: ${ui:-<no output>}"
+          if [ -n "$registry" ]; then
+            echo "::notice::Next: set repo variable APICURIO_REGISTRY_URL=$registry, then re-run contract-governance.yml (or the next PR touching a registered contract) to see the compatibility-check/register-and-sync jobs stop no-op'ing."
+          fi
+          if [ -n "$ui" ]; then
+            echo "::notice::cors_origins in envs/dev.tfvars still needs $ui adding, then one more apply — the CloudFront domain does not exist until this apply has run, and the BFF only allows origins it was configured with. DEPLOY-DEV.md Phase 4."
+          fi
+
+  # Gated on APICURIO_UI alone, so shipping a UI change never applies Terraform
+  # unattended. It only READS Terraform state (terraform output), which is why
+  # it can run on a 'skip' infra run — but it runs AFTER the infra job whenever
+  # that job runs, because a bundle built from pre-apply outputs would point at
+  # the previous API Gateway.
+  ui:
+    name: Build and deploy the UI bundle
+    needs: [resolve, infra]
+    if: >-
+      ${{ !cancelled()
+      && needs.resolve.result == 'success'
+      && needs.resolve.outputs.ui == 'deploy'
+      && needs.infra.result != 'failure' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Same pin as the infra job. Used read-only here: init + output, no plan,
+      # no apply. terraform_wrapper: false for the command substitutions below.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      # Where the bundle points and where it is published both come from
+      # Terraform state rather than repo variables — one fewer value to keep in
+      # sync by hand, and it cannot silently disagree with what is deployed.
+      - name: Read the stack's outputs
+        working-directory: stacks/apicurio/infrastructure/terraform
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure -input=false -backend-config=backends/dev.hcl
+          api=$(terraform output -raw bff_api_url 2>/dev/null || echo "")
+          bucket=$(terraform output -raw ui_bucket 2>/dev/null || echo "")
+          dist=$(terraform output -raw ui_distribution_id 2>/dev/null || echo "")
+
+          # All three outputs are still required, but for a different reason
+          # than before: bff_api_url is no longer compiled into the bundle, it
+          # is written to dist/config.json at publish time. Catching an empty
+          # value here keeps the failure at the step that can explain it.
+          missing=""
+          [ -n "$api" ]    || missing="$missing bff_api_url"
+          [ -n "$bucket" ] || missing="$missing ui_bucket"
+          [ -n "$dist" ]   || missing="$missing ui_distribution_id"
+          if [ -n "$missing" ]; then
+            echo "::error::Terraform outputs unavailable:$missing. Nothing is deployed yet — run this workflow with infra=apply first."
+            exit 1
+          fi
+
+          echo "UI_API_URL=$api" >> "$GITHUB_ENV"
+          echo "UI_BUCKET=$bucket" >> "$GITHUB_ENV"
+          echo "UI_DISTRIBUTION_ID=$dist" >> "$GITHUB_ENV"
+          echo "::notice::UI build target — API $api, bucket $bucket, distribution $dist"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: stacks/apicurio/ui/package-lock.json
+
+      - name: Install
+        working-directory: stacks/apicurio/ui
+        run: npm ci
+
+      - name: Build
+        working-directory: stacks/apicurio/ui
+        # No VITE_API_URL. The API origin is no longer compiled in -- it is
+        # written to dist/config.json below and fetched by the browser at boot,
+        # which is what makes one bundle promotable across environments.
+        run: npm run build
+
+      - name: Sync to the UI bucket
+        working-directory: stacks/apicurio/ui
+        run: |
+          set -euo pipefail
+          # The API origin, written per environment rather than compiled in.
+          # It goes INTO dist/ before the sync rather than being copied
+          # afterwards, so there is no window in which the bucket serves the
+          # localhost default that ui/public/config.json carries for local
+          # development.
+          #
+          # This is also the guard that used to sit in "Read the stack's
+          # outputs": an empty origin used to build clean, issue same-origin
+          # requests, and have CloudFront answer them with index.html.
+          if [ -z "${UI_API_URL:-}" ]; then
+            echo "::error::bff_api_url is empty, so the UI has no API origin to call. Run this workflow with infra=apply first."
+            exit 1
+          fi
+          printf '{\n  "apiUrl": "%s"\n}\n' "$UI_API_URL" > dist/config.json
+
+          # This stack's OWN bucket, whose entire contents are this bundle —
+          # the sync goes to the root and --delete is safe. (On the Entra
+          # branch the same job syncs to a registry/ prefix of the GIP Team
+          # Hub's shared bucket, where the root belongs to another app; that
+          # prefix, its /registry/ vite `base` assertion and its Entra
+          # VITE_AAD_* guards are all dropped here, because this stack has its
+          # own distribution served at /, no vite `base`, and no Entra client.)
+          aws s3 sync dist/ "s3://$UI_BUCKET/" --delete
+          # index.html is the one document whose name never changes, so it is
+          # also the one a browser can hold on to across a deploy.
+          aws s3 cp dist/index.html "s3://$UI_BUCKET/index.html" \
+            --cache-control 'no-cache, must-revalidate'
+          # config.json is unhashed and its name never changes, so it is the
+          # other document a browser can hold across a deploy -- and a stale
+          # copy points the UI at the previous environment's API.
+          aws s3 cp dist/config.json "s3://$UI_BUCKET/config.json" \
+            --cache-control 'no-cache, must-revalidate'
+
+      - name: Invalidate the entry document on CloudFront
+        run: |
+          set -euo pipefail
+          # WHY ONLY THE ENTRY DOCUMENT: Vite emits content-hashed asset
+          # filenames (assets/index-<hash>.js), so a new build writes new keys.
+          # A cached copy of an old asset can never be served to a new page —
+          # nothing references it — which is why hashed assets never need
+          # invalidating and their TTL is left to the distribution's cache
+          # policy.
+          #
+          # /index.html is what AWS documents as the way to invalidate a
+          # distribution's default root object, so it is the path that matters.
+          # "/" is invalidated alongside it deliberately: frontend.tf gives
+          # /index.html its own CachingDisabled behaviour, while a viewer asking
+          # for "/" may be matched against the default (CachingOptimized)
+          # behaviour, and the exact ordering of default-root-object
+          # substitution against cache-behaviour matching is not something to
+          # bet a stale-page bug on. Two paths in one invalidation costs
+          # nothing.
+          #
+          # HONEST GAP: unhashed files copied from ui/public/ are NOT
+          # invalidated and will serve stale until their TTL expires — today
+          # that is just pearson-logo.png. config.json is the one exception: it
+          # is unhashed, environment-specific, and invalidated below, because a
+          # stale copy points the UI at the previous environment's API rather
+          # than merely showing an old logo.
+          aws cloudfront create-invalidation \
+            --distribution-id "$UI_DISTRIBUTION_ID" \
+            --paths '/' '/index.html' '/config.json'
+          echo "::notice::UI published. CloudFront invalidation created on $UI_DISTRIBUTION_ID."
+
+  # ── QE tier 2: does the deployed thing actually work? ───────────────────────
+  #
+  # "Nothing below is satisfied by a green apply" -- DEPLOY-DEV.md Phase 5,
+  # which specifies this job. Until now the workflow's last word was an
+  # ::notice printing three URLs; whether anything behind them answered was
+  # left to somebody curling by hand.
+  #
+  # It runs against the PUBLIC API Gateway, because that is the only surface a
+  # GitHub-hosted runner can reach -- both ALBs are internal. And it
+  # authenticates with the authorizer's shared-secret header rather than a
+  # source-IP allowlist, because runner addresses move; this job is the first
+  # real consumer of that second credential path.
+  #
+  # Gated separately from everything else and defaulting to `run`: it changes
+  # nothing, so there is no deploy-window risk to latch against, and a check
+  # that must be switched on is a check nobody switches on.
+  #
+  # ONE PREREQUISITE IT CANNOT CREATE FOR ITSELF, and it says so rather than
+  # failing cryptically: an operator must set the SAME key in two places --
+  # the uif/apicurio/dev/auth/ci value in Secrets Manager, which is what the
+  # authorizer compares against, and the APICURIO_CI_KEY Actions secret, which
+  # is what this job presents. Terraform creates the container and deliberately
+  # no version, so the value never enters state or a saved plan.
+  #
+  # WHY TWO COPIES RATHER THAN ONE READ. This job used to fetch the value from
+  # Secrets Manager, which needed secretsmanager:GetSecretValue on the deploy
+  # role -- and that is denied on purpose. The policy statement is named
+  # CiSecretContainerNoValueAccess and grants Create/Describe/Delete/tagging
+  # but neither GetSecretValue nor PutSecretValue: the deploy role owns the
+  # container, only the authorizer's own role reads the value, and
+  # uif-apicurio-dev-phase3-deploy-policy.sh asserts that denial as a boundary
+  # whose flipping is "a blocking failure". Granting the read to make a test
+  # pass would have retired a deliberate least-privilege design, so the key
+  # comes from an Actions secret instead and this job no longer touches
+  # Secrets Manager at all.
+  #
+  # The cost is drift between the two copies, which is why the health check
+  # below treats HTTP 403 as exactly that and says so instead of retrying.
+  smoke:
+    name: Smoke checks (QE tier 2)
+    needs: [resolve, infra, ui]
+    # always() so a skipped infra/ui job does not skip this too: verifying an
+    # environment nobody changed in this run is still worth doing, and is how
+    # you confirm a rollback or an out-of-band change left it healthy. It is
+    # skipped only when asked to be, or when a job it depends on actually
+    # FAILED -- there is nothing to verify behind a broken apply.
+    if: >-
+      always()
+      && needs.resolve.outputs.smoke == 'run'
+      && needs.infra.result != 'failure'
+      && needs.ui.result != 'failure'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      # fetch-depth 0 so `git describe` in the last step can see the
+      # apicurio/v* tags -- a shallow clone has none of them.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Read the environment's real addresses rather than reconstructing them.
+      - name: Read the stack's outputs
+        id: tf
+        working-directory: stacks/apicurio/infrastructure/terraform
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure -input=false -backend-config=backends/dev.hcl
+          for o in bff_api_url ui_url ecs_cluster_name bff_service_name \
+                   registry_service_name authorizer_ci_secret_name authorizer_ci_header; do
+            v=$(terraform output -raw "$o" 2>/dev/null || echo "")
+            echo "$o=$v" >> "$GITHUB_OUTPUT"
+          done
+
+      # The gate DEPLOY-DEV.md Phase 5 opens with: both services at
+      # runningCount == desiredCount. `wait services-stable` polls until that is
+      # true or gives up, so a deploy that leaves a task crash-looping fails
+      # here instead of being discovered by a user. With the deployment circuit
+      # breaker now enabled, ECS will already have rolled back by the time this
+      # gives up -- so a failure here means "the rollback happened", which is
+      # worth reading the task's stopped reason for.
+      - name: Wait for both ECS services to reach a steady state
+        env:
+          CLUSTER: ${{ steps.tf.outputs.ecs_cluster_name }}
+          BFF_SVC: ${{ steps.tf.outputs.bff_service_name }}
+          REG_SVC: ${{ steps.tf.outputs.registry_service_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CLUSTER" ]; then
+            echo "::error::No ecs_cluster_name output — the stack has not been applied yet, so there is nothing to smoke-test. Run with infra=apply first."
+            exit 1
+          fi
+          echo "::notice::Waiting for $BFF_SVC and $REG_SVC on $CLUSTER..."
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$BFF_SVC" "$REG_SVC"
+          aws ecs describe-services --cluster "$CLUSTER" --services "$BFF_SVC" "$REG_SVC" \
+            --query 'services[].{name:serviceName,desired:desiredCount,running:runningCount}' \
+            --output table
+
+      # Fails here, before any request, when the Actions secret is unset --
+      # otherwise every check below fails as a 403 and reads like a broken
+      # environment rather than an unset secret.
+      - name: Check the CI key is configured
+        env:
+          KEY: ${{ secrets.APICURIO_CI_KEY }}
+          SECRET_NAME: ${{ steps.tf.outputs.authorizer_ci_secret_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEY:-}" ]; then
+            echo "::error::The APICURIO_CI_KEY Actions secret is empty or unset, so this job has no credential to present. Set it to the same value as ${SECRET_NAME:-uif/apicurio/dev/auth/ci} in Secrets Manager, which the authorizer compares against; if that has never been set either, generate one value and put it in both: 'aws secretsmanager put-secret-value --secret-id ${SECRET_NAME:-uif/apicurio/dev/auth/ci} --secret-string \"\$(openssl rand -hex 32)\"' and then 'gh secret set APICURIO_CI_KEY'. DEPLOY-DEV.md Phase 1."
+            exit 1
+          fi
+          echo "::notice::CI key present (from the APICURIO_CI_KEY Actions secret)."
+
+      # READ THE BODY, NOT THE STATUS CODE. /api/v1/health answers HTTP 200 even
+      # when it is "degraded" -- which is why the ALB health check passes either
+      # way and cannot be used to detect a BFF that has lost the registry.
+      # "degraded" here means the BFF is up but Apicurio is unreachable.
+      - name: Health check through the API Gateway
+        env:
+          API: ${{ steps.tf.outputs.bff_api_url }}
+          HDR: ${{ steps.tf.outputs.authorizer_ci_header }}
+          KEY: ${{ secrets.APICURIO_CI_KEY }}
+          SECRET_NAME: ${{ steps.tf.outputs.authorizer_ci_secret_name }}
+        run: |
+          set -euo pipefail
+          hdr="${HDR:-X-UIF-CI-Key}"
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sS --max-time 20 -o /tmp/health.json -w '%{http_code}' \
+                     -H "$hdr: $KEY" "$API/api/v1/health" || echo "000")
+            body="$(cat /tmp/health.json 2>/dev/null || echo "")"
+            # A 403 comes from the AUTHORIZER, not the BFF, and now that the key
+            # is held in two places it means one thing: they disagree. Retrying
+            # cannot reconcile them, so this stops rather than spending two
+            # minutes proving it again.
+            if [ "$code" = "403" ]; then
+              echo "::error::The authorizer denied this request (HTTP 403), so the APICURIO_CI_KEY Actions secret does not match the value in ${SECRET_NAME:-the CI secret}. That is the one failure mode of keeping the key in two places; re-set both from a single generated value. Not retrying, because nothing about this changes on a second attempt."
+              exit 1
+            fi
+            state=$(printf '%s' "$body" | jq -r '.state // empty' 2>/dev/null || echo "")
+            if [ "$state" = "up" ]; then
+              echo "::notice::Health is 'up' on attempt $attempt."
+              printf '%s' "$body" | jq .
+              exit 0
+            fi
+            echo "attempt $attempt: state='${state:-<unparseable>}' — retrying in 20s"
+            sleep 20
+          done
+          echo "::error::/api/v1/health never reported state 'up'. 'degraded' means the BFF is running but cannot reach the registry — check the registry service and its RDS secret injection, not the BFF image. Last body above."
+          printf '%s' "${body:-<empty>}" | head -c 2000
+          exit 1
+
+      # The app package, not just the test tooling. This suite exercises the
+      # BFF's OWN client code against the deployed registry, so the app's
+      # runtime dependencies have to be present: qe/tests/conftest.py:7 imports
+      # `app.clients.cmdb_client` (and test_registry_v3.py imports
+      # `app.clients.apicurio_client`), which reaches app.core.logging ->
+      # structlog. qe/conftest.py puts src/ on sys.path, which makes `app.*`
+      # RESOLVE but installs nothing, so before this line the suite died at
+      # COLLECTION -- in conftest, before a single test ran -- with
+      # `ModuleNotFoundError: No module named 'structlog'`.
+      #
+      # `-e src/` rather than naming structlog: the failure is a class, not one
+      # module. src/pyproject.toml declares fastapi, pydantic, boto3 and more,
+      # and pinning the symptom would break again on the next app dependency
+      # used at import time. Same idiom as stacks-ci.yml's ci and SCA jobs.
+      #
+      # Tier 1 cannot catch this: qe/ci.sh runs pytest with
+      # `--ignore=qe/tests/integration`, so these files are never imported
+      # there. It stayed invisible until tier 2 first ran (2026-09-20).
+      - name: Install the integration suite's dependencies
+        working-directory: stacks/apicurio
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -e src/
+          python -m pip install --quiet 'pytest>=8.3' pytest-asyncio httpx
+
+      # Tier 2 proper. `-m "not requires_seed"` is the load-bearing flag: a
+      # freshly deployed registry is legitimately empty, and without it the two
+      # seeded-data assertions fail against exactly the deploy this job exists
+      # to verify. Tier 3 runs them after seeding (DEPLOY-DEV.md Phase 5b).
+      - name: Run the integration suite against the deployed stack
+        working-directory: stacks/apicurio
+        env:
+          RUN_INTEGRATION_TESTS: "1"
+          BFF_URL: ${{ steps.tf.outputs.bff_api_url }}
+          UI_ORIGIN: ${{ steps.tf.outputs.ui_url }}
+          APICURIO_CI_KEY: ${{ secrets.APICURIO_CI_KEY }}
+          APICURIO_CI_HEADER: ${{ steps.tf.outputs.authorizer_ci_header }}
+          # A runner is never IP-allowlisted, so the authorizer MUST deny an
+          # uncredentialled request from here. On a laptop inside the allowlist
+          # the opposite is correct, which is why the test is flagged rather
+          # than assumed.
+          EXPECT_AUTHORIZER_DENY: "1"
+        run: |
+          python -m pytest qe/tests/integration -v -m "not requires_seed"
+
+      - name: What was not verified
+        if: always()
+        env:
+          UI: ${{ steps.tf.outputs.ui_url }}
+        run: |
+          echo "::notice::Smoke checks cover the API surface only. The UI at ${UI:-<no output>} is NOT exercised here: ui/e2e/ drives a real browser, and a browser cannot send the authorizer's shared-secret header, so a runner-driven browser is denied before it loads any data. That needs either an allowlisted egress address or the real user-facing authentication this stack still does not have (CHECKLIST.md 'Operate'). Until then, the UI check in DEPLOY-DEV.md Phase 5 stays manual."
+
+      - name: Report which build tag this deployed
+        if: always()
+        run: |
+          set -euo pipefail
+          # Seed for Half 2: when releases/<env>.yaml exists it can be
+          # generated from data already emitted here. "+N commits" meanwhile is
+          # an honest signal that dev is ahead of its last release.
+          described="$(git describe --tags --match 'apicurio/v*' --always 2>/dev/null || echo "")"
+          if [ -z "$described" ]; then
+            echo "::notice::No apicurio/v* tag is reachable from ${GITHUB_SHA}. Nothing has been released yet -- bump stacks/apicurio/VERSION to cut the first one."
+          else
+            echo "::notice::Deployed ${described}"
+          fi

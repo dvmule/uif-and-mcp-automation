@@ -1,0 +1,101 @@
+name: Deploy delivery-fabric POC2 — Dev
+
+# The UIFPE-453 Option-B prototype (delivery-lab/reference-implementations/
+# uifpe-453-poc2-delivery-fabric): shared buffer queue, delivery-fabric /
+# failed-writer / test-publisher Lambdas, three uif-event-poc2-* DynamoDB
+# tables. Deploys with the same OIDC role as the event stack
+# (AWS_ROLE_ARN_DEV, environment: dev).
+#
+# Deliberately different from the stack deploys: a push to develop only ever
+# PLANS — applying (and destroying) a POC is always an explicit
+# workflow_dispatch choice. No repo-variable latch needed; the dispatch input
+# is the latch. This also closes the gap that delivery-lab roots previously
+# had no deploy path at all (found on UIFPE-453: merged POC code did not
+# materialise in AWS because nothing applied it).
+#
+# The moto suite gates every run: it drives the real lambda_src modules and
+# must pass 16/16 before Terraform touches anything.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "delivery-lab/reference-implementations/uifpe-453-poc2-delivery-fabric/**"
+      - ".github/workflows/deploy-delivery-poc2-dev.yml"
+  workflow_dispatch:
+    inputs:
+      infra:
+        description: "Terraform action for the POC2 stack"
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+
+concurrency:
+  group: deploy-delivery-poc2-dev
+  cancel-in-progress: false
+
+env:
+  ENV: dev
+  AWS_REGION: eu-west-1
+  POC_ROOT: delivery-lab/reference-implementations/uifpe-453-poc2-delivery-fabric
+
+jobs:
+  test:
+    name: Local simulation (moto drives the real handlers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install suite dependencies
+        run: pip install -r $POC_ROOT/local-simulation/requirements.txt
+      - name: Run the 16-check suite
+        run: python $POC_ROOT/local-simulation/run_poc2_local.py
+
+  deploy:
+    name: Terraform (POC2 delivery fabric, dev)
+    needs: test
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Resolve action
+        id: act
+        run: |
+          ACTION="${{ github.event_name == 'workflow_dispatch' && inputs.infra || 'plan' }}"
+          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+          echo "::notice::POC2 terraform action: $ACTION (push runs only ever plan — apply/destroy are dispatch choices)"
+
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: eu-west-1
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        working-directory: ${{ env.POC_ROOT }}/terraform
+        run: terraform init -reconfigure -backend-config=backends/$ENV.s3.tfbackend
+
+      - name: Terraform plan
+        if: steps.act.outputs.action != 'destroy'
+        working-directory: ${{ env.POC_ROOT }}/terraform
+        run: terraform plan -out=$ENV.tfplan
+
+      - name: Terraform apply
+        if: steps.act.outputs.action == 'apply'
+        working-directory: ${{ env.POC_ROOT }}/terraform
+        run: terraform apply $ENV.tfplan
+
+      - name: Terraform destroy
+        if: steps.act.outputs.action == 'destroy'
+        working-directory: ${{ env.POC_ROOT }}/terraform
+        run: terraform destroy -auto-approve

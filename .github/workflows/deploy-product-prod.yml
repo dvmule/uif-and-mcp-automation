@@ -1,0 +1,162 @@
+name: Deploy product — Prod
+
+# Branch → environment contract: prod deploys ONLY from main.
+# Manual dispatch with a two-step gate: plan always runs; apply only when
+# the "apply" input is explicitly set to "yes" (dry-run by default).
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the deployment (no = plan/dry-run only)"
+        type: choice
+        options: ["no", "yes"]
+        default: "no"
+
+concurrency:
+  group: deploy-product-prod
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan prod deployment
+    # Guard: prod only ever deploys from main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      # NOTE: renamed from DEPLOY_ENABLED to PRODUCT_DEPLOY_ENABLED — scoped
+      # to this domain in the monorepo. Unset (the default) evaluates to
+      # != 'true', so the latch fails closed and deploys are skipped — safe
+      # default.
+      - name: Cutover latch
+        if: vars.PRODUCT_DEPLOY_ENABLED != 'true'
+        run: |
+          echo "::error::Deploys are latched OFF (repo variable PRODUCT_DEPLOY_ENABLED != 'true')."
+          exit 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Test gate
+        run: |
+          pip install -r domains/product/qe/requirements-dev.txt
+          python -m pytest domains/product/qe -q
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: eu-west-1
+
+      # Pinned so the binary plan file produced here is guaranteed portable
+      # to the apply job below — a Terraform plan file is only safe to apply
+      # with the exact same Terraform (and provider) version that created
+      # it. Bump the pin here AND in the apply job's setup-terraform step
+      # together; never let them drift.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Terraform plan
+        working-directory: domains/product/infrastructure/terraform
+        run: |
+          make init ENV=$ENV
+          make plan ENV=$ENV
+
+      # The approver reviews THIS plan file's output — the apply job below
+      # downloads and applies this exact artifact instead of re-planning, so
+      # what gets approved is what gets applied (finding #17).
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-tfplan
+          path: domains/product/infrastructure/terraform/prod.tfplan
+          retention-days: 5
+
+      - name: Pipeline config sync (plan only)
+        run: python stacks/echo/src/apps/cli/sync_pipelines.py --env $ENV
+
+  deploy:
+    name: Apply prod deployment
+    needs: plan
+    if: github.ref == 'refs/heads/main' && inputs.apply == 'yes'
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENV: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_PROD }}
+          aws-region: eu-west-1
+
+      # Same pin as the plan job — required for the downloaded plan file to
+      # be a valid input to `terraform apply` here (see the plan job's
+      # setup-terraform comment).
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-tfplan
+          path: domains/product/infrastructure/terraform
+
+      - name: Terraform apply
+        # Applies the exact plan file the approver reviewed above — does
+        # NOT re-run `make plan`/`terraform plan` (finding #17: regenerating
+        # the plan here would apply a plan nobody actually reviewed).
+        working-directory: domains/product/infrastructure/terraform
+        run: |
+          make init ENV=$ENV
+          make apply ENV=$ENV
+
+      - name: Upload Glue scripts (gold/ prefix — ours alone)
+        run: |
+          # DO NOT change the "gold/" prefix in the destination below — the
+          # platform's own deploy runs `s3 sync glue_jobs/ --delete` against
+          # this same bucket and will purge anything of ours placed outside
+          # this prefix. Only the source path is re-rooted for the monorepo.
+          echo "Glue scripts ship from stacks/echo/infrastructure/terraform-gold (ADR-0018 step 2)"
+
+      # UIFPE-117: --delete scoped PER ENTITY — the destination prefix is
+      # shared across gold domains, so a domain-wide --delete would purge
+      # another domain's artifacts. See deploy-product-dev.yml for the full
+      # rationale.
+      - name: Sync schema + mapping artifacts
+        run: |
+          for d in domains/product/src/schemas/gold/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/schemas/gold/$entity" --delete
+          done
+          for d in domains/product/src/schemas/mapping/*/; do
+            entity=$(basename "$d")
+            aws s3 sync "$d" "s3://uif-echo-$ENV-gold-artifacts/mappings/$entity" --delete --exclude "*.mapping.json"
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Sync pipeline configs (config-as-code)
+        run: |
+          pip install -r domains/product/qe/requirements-dev.txt
+          python stacks/echo/src/apps/cli/sync_pipelines.py --env $ENV --apply

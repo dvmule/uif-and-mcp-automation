@@ -1,0 +1,284 @@
+name: Deploy event infra (converge from a build tag)
+
+# Phase 2 of capabilities/delivery/stack-promotion-model.md for the event stack
+# (UIFPE-744): converge the ONE Terraform root in a promoted environment with
+# that environment's tfvars, from an event/vX.Y.Z build tag. Modelled on
+# deploy-echo-infra.yml, which has converged uat for echo.
+#
+# COPY, NEVER REBUILD. Before planning, the artifacts the tag's manifest names
+# are copied from dev's release bucket into this environment's, pinned to the
+# version the tag recorded (scripts/copy-artifacts.sh), and their hashes are
+# written where the root reads them. Nothing in a promoted environment builds
+# from the repository.
+#
+# LATCH (model §5): repo variable EVENT_UAT_INFRA, resolved by
+# scripts/resolve-deploy-mode.sh --
+#   unset|skip  do nothing (DEFAULT; unrecognised values collapse to it)
+#   plan        plan only, changes nothing -- read it, then re-run with apply
+#   apply       apply the plan THIS run produced
+#   bootstrap   FIRST CONVERGE ONLY: create the release bucket (a targeted
+#               apply -- the copy needs it before the first plan), then copy,
+#               plan and apply everything
+# A dispatch input overrides the variable; the variable decides on a tag push.
+# Close the window afterwards: gh variable delete EVENT_UAT_INFRA.
+#
+# PLAN AND APPLY STAY IN THE SAME JOB (model §3). A saved plan carries
+# generated values in clear, so it is never uploaded. The environment's
+# reviewer approves the INTENT -- this tag, this environment; to read the plan
+# first, run with `plan`, read it, then re-run from the same (immutable) tag
+# with `apply`.
+#
+# TRIGGERS. A push of event/v* or a dispatch, per the model. Note the model's
+# §7 trap: release-event.yml pushes tags with GITHUB_TOKEN, which triggers
+# nothing, so in practice this runs by DISPATCH with the tag selected under
+# "Use workflow from". A branch dispatch is refused before any environment.
+#
+# ROLE. uat uses ECHO's uat deploy role (AWS_ROLE_ARN_ECHO_UAT), extended with
+# the event stack's own derived policy by
+# stacks/event/infrastructure/deploy/bootstrap-environment.sh (owner decision
+# 2026-09-30; a deviation from the model's per-stack role, recorded in
+# stacks/event/DEPLOY-UAT.md). Run that bootstrap first.
+#
+# promote-event.yml then only changes which version runs; it shares this
+# workflow's concurrency group so the two never interleave on one state file.
+
+on:
+  push:
+    tags: ["event/v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [uat]
+        default: uat
+      infra:
+        description: "skip | plan | apply | bootstrap (first converge only)"
+        type: choice
+        options: [skip, plan, apply, bootstrap]
+        default: plan
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+  TF_VERSION: "1.15.8"
+  ROOT: stacks/event/infrastructure/terraform
+
+jobs:
+  resolve:
+    name: Resolve the latch, check the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      environment: ${{ steps.mode.outputs.environment }}
+      infra: ${{ steps.mode.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_ENV: ${{ inputs.environment }}
+          IN_INFRA: ${{ inputs.infra }}
+          VAR_UAT: ${{ vars.EVENT_UAT_INFRA }}
+        run: |
+          set -euo pipefail
+          resolver=stacks/event/scripts/resolve-deploy-mode.sh
+          environment="$(bash "$resolver" --event "$EVENT" --input "${IN_ENV:-}" --var "uat" \
+            --allowed "uat" --default "uat")"
+          infra="$(bash "$resolver" --event "$EVENT" --input "${IN_INFRA:-}" --var "${VAR_UAT:-}" \
+            --allowed "skip,plan,apply,bootstrap" --default "skip")"
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
+          {
+            echo "### event infra"
+            echo "- environment: \`${environment}\`"
+            echo "- infra: \`${infra}\`"
+            echo "- ref: \`${GITHUB_REF}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$infra" = "skip" ]; then
+            echo "::notice::infra=skip, so nothing will be copied, planned or applied. Set EVENT_UAT_INFRA for the deploy window, or dispatch with infra=plan."
+          fi
+
+      # Gated on the mode, so a skip run from anywhere stays a green no-op.
+      - name: Dispatched from an event build tag
+        if: steps.mode.outputs.infra != 'skip'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          case "$REF" in
+            refs/tags/event/v*) echo "::notice::converging from ${REF#refs/tags/}." ;;
+            *)
+              echo "::error::this run's ref is ${REF}, not an event/vX.Y.Z build tag. Dispatch with the tag selected under 'Use workflow from'. Nothing has been assumed, copied or planned."
+              exit 1 ;;
+          esac
+
+      # actions/checkout on a tag ref leaves a LIGHTWEIGHT tag locally (model §7).
+      - name: Re-fetch the annotated tag and check its evidence
+        if: steps.mode.outputs.infra != 'skip'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          [ "$(git cat-file -t "$TAG")" = "tag" ] \
+            || { echo "::error::${TAG} is not an annotated tag, so it carries no manifest."; exit 1; }
+          gate="$(bash stacks/event/scripts/read-manifest.sh "$TAG" gate.conclusion)"
+          [ "$gate" = "success" ] || { echo "::error::${TAG}'s gate is '${gate}'."; exit 1; }
+          # A tag cut before release-event.yml staged artifacts (event/v0.10.0)
+          # has no artifacts block; --dump refuses it with its own message.
+          rows="$(bash stacks/event/scripts/read-manifest.sh "$TAG" --dump | grep -c .)"
+          echo "::notice::${TAG}: gate success, ${rows} artifacts."
+
+  converge:
+    name: Converge event ${{ needs.resolve.outputs.environment }} (${{ needs.resolve.outputs.infra }})
+    needs: resolve
+    if: needs.resolve.outputs.infra != 'skip'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Reviewer + tag-only deployment policy (event/v*) live on the Environment.
+    environment: ${{ needs.resolve.outputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    # The SAME group promote-event.yml uses. Never cancel in progress -- a
+    # cancelled apply can leave the state lock held.
+    concurrency:
+      group: event-deploy-${{ needs.resolve.outputs.environment }}
+      cancel-in-progress: false
+    env:
+      ENV_NAME: ${{ needs.resolve.outputs.environment }}
+      INFRA: ${{ needs.resolve.outputs.infra }}
+      TAG: ${{ github.ref_name }}
+      BACKEND: backends/${{ needs.resolve.outputs.environment }}.s3.tfbackend
+      RELEASE_BUCKET: uif-event-${{ needs.resolve.outputs.environment }}-release-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Re-fetch the annotated tag object
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          [ "$(git cat-file -t "$TAG")" = "tag" ] || { echo "::error::${TAG} is not annotated."; exit 1; }
+
+      - name: This root describes this environment
+        run: |
+          set -euo pipefail
+          missing=""
+          for f in "${ROOT}/${BACKEND}" "${ROOT}/envs/${ENV_NAME}.tfvars"; do
+            [ -f "$f" ] || missing="${missing} ${f}"
+          done
+          [ -z "$missing" ] || { echo "::error::missing:${missing}"; exit 1; }
+
+      # One step per environment, each naming its secret literally.
+      - name: Assume uat's deploy role
+        if: needs.resolve.outputs.environment == 'uat'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_ECHO_UAT }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Prove which role this run assumed
+        run: |
+          set -euo pipefail
+          arn="$(aws sts get-caller-identity --query Arn --output text)"
+          echo "::notice::assumed ${arn}"
+          case "$arn" in
+            *"/uif-echo-${ENV_NAME}-deploy-role/"*) ;;
+            *) echo "::error::assumed ${arn}, not uif-echo-${ENV_NAME}-deploy-role. Nothing has been copied or planned."; exit 1 ;;
+          esac
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Init
+        working-directory: ${{ env.ROOT }}
+        run: terraform init -reconfigure -input=false -backend-config="${BACKEND}"
+
+      # The copy needs the destination before the first plan, and Terraform
+      # declares it: the model's `bootstrap` mode exists for exactly this
+      # (apicurio creates its ECR repository here). Only `bootstrap` creates it;
+      # `plan` reads hashes from the manifest instead so the first plan can be
+      # read before anything exists; `apply` refuses, naming the mode to use.
+      - name: Release bucket
+        id: bucket
+        working-directory: ${{ env.ROOT }}
+        run: |
+          set -euo pipefail
+          if aws s3api head-bucket --bucket "$RELEASE_BUCKET" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          case "$INFRA" in
+            bootstrap)
+              echo "::notice::creating ${RELEASE_BUCKET} (bootstrap: first converge only)."
+              terraform apply -auto-approve -input=false -var-file="envs/${ENV_NAME}.tfvars" \
+                -target=aws_s3_bucket.release_artifacts \
+                -target=aws_s3_bucket_versioning.release_artifacts \
+                -target=aws_s3_bucket_public_access_block.release_artifacts \
+                -target=aws_s3_bucket_server_side_encryption_configuration.release_artifacts
+              echo "exists=true" >> "$GITHUB_OUTPUT" ;;
+            plan)
+              echo "::notice::${RELEASE_BUCKET} does not exist yet; planning from the manifest's hashes, nothing copied. The first apply must use infra=bootstrap."
+              echo "exists=false" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::${RELEASE_BUCKET} does not exist. The first converge of an environment is infra=bootstrap, not ${INFRA}."
+              exit 1 ;;
+          esac
+
+      - name: Copy the tag's artifacts and write their hashes
+        env:
+          EXISTS: ${{ steps.bucket.outputs.exists }}
+        run: |
+          set -euo pipefail
+          out="${ROOT}/artifacts.auto.tfvars.json"
+          if [ "$EXISTS" = "true" ]; then
+            bash stacks/event/scripts/copy-artifacts.sh --tag "$TAG" \
+              --to-bucket "$RELEASE_BUCKET" --tfvars "$out" \
+              --tsv "${RUNNER_TEMP}/promoted-rows.tsv"
+          else
+            # Plan-only, first run: the same tfvars shape copy-artifacts.sh
+            # writes, from the same validated --dump, with nothing copied.
+            bash stacks/event/scripts/read-manifest.sh "$TAG" --dump > "${RUNNER_TEMP}/rows.tsv"
+            {
+              printf '{\n  "artifact_shas": {\n'
+              awk -F'\t' '{printf "%s    \"%s\": \"%s\"", (NR>1 ? ",\n" : ""), $2, $4} END {print ""}' "${RUNNER_TEMP}/rows.tsv"
+              printf '  },\n  "lambda_code_hashes": {\n'
+              awk -F'\t' '$1 == "lambdas" {printf "%s    \"%s\": \"%s\"", (n++ ? ",\n" : ""), $2, $8} END {print ""}' "${RUNNER_TEMP}/rows.tsv"
+              printf '  }\n}\n'
+            } > "$out"
+          fi
+          cat "$out"
+
+      - name: Plan
+        working-directory: ${{ env.ROOT }}
+        run: terraform plan -input=false -var-file="envs/${ENV_NAME}.tfvars" -out=tf.plan
+
+      # Addresses and actions only -- never the plan's values.
+      - name: Summarise the plan
+        working-directory: ${{ env.ROOT }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### event ${ENV_NAME} plan from ${TAG} (${INFRA})"
+            echo '```'
+            terraform show -json tf.plan \
+              | jq -r '.resource_changes[] | select(.change.actions != ["no-op"])
+                       | "\(.change.actions | join(","))\t\(.address)"' \
+              | sort -k2
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The plan this run produced, in this job (model §3).
+      - name: Apply
+        if: env.INFRA == 'apply' || env.INFRA == 'bootstrap'
+        working-directory: ${{ env.ROOT }}
+        run: terraform apply -input=false tf.plan

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Refuses a commit whose message is not a Smart Commit.
+#
+# This is the earliest point the rule can be enforced: the message is rejected
+# as it is written, so it never needs rewriting later. The same check runs again
+# on push and in CI, because `--no-verify` bypasses this one.
+set -uo pipefail
+exec "$(git rev-parse --show-toplevel)/.githooks/lint-commits.sh" --message "$1"

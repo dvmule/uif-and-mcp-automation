@@ -1,0 +1,40 @@
+# MCP Bridge configuration for the product domain - the domain's MCP ONBOARDING file and its ONLY
+# hand-written MCP file. Its presence onboards the domain (discovery = this file exists);
+# `contract` selects which OpenAPI contract the MCP route is generated from. UIF conventions
+# derive everything else, so this file holds DOMAIN-SPECIFIC values only.
+#
+# The Bridge itself is SHARED: every UIF domain API of an environment is served by ONE MCP
+# Bridge (uif-domains-mcp, listener /uif/domains; capabilities/mcp/mcp-bridge.md). This file
+# describes only what Product contributes to it - its ROUTE:
+#   contract        : the authoritative OpenAPI 3.1 root (relative to this domain). Its LOCAL
+#                     $ref dependencies under domains/product/src/ (e.g. src/schemas/channels/...)
+#                     are part of the contract; the pipeline bundles them into a transient
+#                     build artifact - the source files are never modified or committed twice.
+#   REST asset      : source_asset_id (convention uif-<domain>-api)
+#   route label     : source_asset_id (override with `route_label`; unique across domains)
+#   upstream        : the COMMON UIF API upstream ORIGIN of the environment, shared by ALL
+#                     domains and configured ONCE in anypoint-environments.yaml (<env>.upstream_url) -
+#                     NOT repeated here. The gateway composes origin + this contract's
+#                     servers[0] base path + operation path. The pipeline reuses/creates the
+#                     Exchange external instance uif-<domain>-<env> at that origin and binds
+#                     this route to it.
+#   tools / mappings: generated from the contract
+# The source association is REQUIRED and automatic (the route binds the external instance's
+# UUID as connection.apiVersionId); connection-less Bridges are not an accepted deployment pattern.
+# Shared-scope values (Bridge label, the ONE MCP Exchange asset, listener base path, transport
+# path, Anypoint org/env/gateway/TLS, the common upstream) live ONCE in
+# anypoint-environments.yaml (`shared_bridge` block + <env>.upstream_url) - never duplicated here.
+# A per-domain mcp_asset_id, base_path or a different transcoding_path is refused. The REST
+# release version is resolved by the pipeline (release_version.py); the gateway version is
+# discovered at deployment time.
+#
+# Domain-specific OVERRIDE (only if we intentionally support that requirement later - e.g. an
+# API served from an origin other than the common UIF upstream). Leave absent otherwise:
+# environments:
+#   dev:
+#     upstream_url: https://<service-origin>/   # origin ONLY - the contract's server base
+#                                               # path is already inside the mapping paths
+
+domain: product
+contract: src/api/product/openapi.yaml  # this domain's MCP contract (it ships 2 OpenAPI contract(s) under src/api)
+source_asset_id: uif-product-api  # Exchange REST asset id (convention uif-<domain>-api)

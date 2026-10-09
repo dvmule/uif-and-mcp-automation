@@ -1,0 +1,358 @@
+name: Deploy beacon — Dev
+
+# Two deployment surfaces, one workflow:
+#
+#   UI    → the shared RELAY CloudFront distribution under /m/beacon/
+#           (transform-UI pattern, deploy-product-dev.yml / UIFPE-99).
+#
+#   INFRA → the Beacon stack's own Terraform (ECS API service + PySpark task,
+#           3 Lambdas, Step Functions, ALB, DynamoDB, S3, CloudFront,
+#           CodeBuild), via the SAME OIDC deploy role product uses
+#           (AWS_ROLE_ARN_DEV, environment: dev). The gip-uif-fde HUMAN role
+#           cannot deploy this stack (audited 2026-08-17); the OIDC role is
+#           the deployer.
+#
+# HOW TO CHOOSE WHAT RUNS — two paths, because GitHub only shows the
+# "Run workflow" button for workflows that exist on the DEFAULT branch, and
+# this repo's default is `main` while the deploy workflows live on `develop`.
+# Until this file reaches main, use the repo-variable path:
+#
+#   REPO VARIABLES (Settings -> Secrets and variables -> Actions -> Variables)
+#     BEACON_INFRA           unset|skip = no Terraform (default)
+#                            plan       = terraform plan only, changes nothing
+#                            apply      = full deploy (see the bootstrap below)
+#     BEACON_DEPLOY_ENABLED  true = also build + deploy the UI
+#     BEACON_API_URL_DEV     the control-panel API base the UI build points at
+#
+#   Set the variable(s), then either push to develop or hit "Re-run all jobs"
+#   on the most recent run — variables are read at run time, so a re-run picks
+#   up new values with no new commit.
+#
+#   !! Leave BEACON_INFRA unset (or 'skip') outside a deploy window. Left on
+#   'apply', every merge touching stacks/beacon/** applies Terraform
+#   unattended, with no human reading the plan first.
+#
+#   workflow_dispatch inputs do the same job per-run (safer: no standing
+#   setting) and take over automatically once this file lands on main.
+#
+#   The TEST GATE (pytest + vitest) ignores both latches and runs on every
+#   push touching stacks/beacon/** (UIFPE-167) — the latches only decide
+#   whether anything is deployed afterwards.
+#
+# Before the first infra apply: envs/dev.tfvars must carry real vpc/subnet
+# ids. Plan is safe to run any time.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "stacks/beacon/**"
+      # Shared runtime code the Lambda zips copy in (platform/python/README.md)
+      - "platform/python/**"
+      - ".github/workflows/deploy-beacon-dev.yml"
+  workflow_dispatch:
+    inputs:
+      infra:
+        description: "Terraform action for the Beacon stack"
+        type: choice
+        options: [plan, apply, skip]
+        default: plan
+      deploy_ui:
+        description: "Also deploy the UI to the shared RELAY CloudFront"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-beacon-dev
+  cancel-in-progress: false
+
+env:
+  ENV: dev
+  AWS_REGION: eu-west-1
+  STACK: uif-beacon-dev
+
+jobs:
+  # One place decides what this run does, so the choice is visible in the log
+  # instead of hidden across six `if:` expressions. Dispatch inputs win when
+  # present; otherwise the repo variables decide. Anything unrecognised is
+  # treated as skip — the latch fails closed, as product's does.
+  resolve:
+    name: What this run will do (Beacon stack)
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.mode.outputs.infra }}
+      ui: ${{ steps.mode.outputs.ui }}
+    steps:
+      - id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_INFRA: ${{ inputs.infra }}
+          IN_UI: ${{ inputs.deploy_ui }}
+          VAR_INFRA: ${{ vars.BEACON_INFRA }}
+          VAR_UI: ${{ vars.BEACON_DEPLOY_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            infra="${IN_INFRA:-skip}"
+            ui="${IN_UI:-false}"
+            source="workflow_dispatch inputs"
+          else
+            infra="${VAR_INFRA:-skip}"
+            ui=$([ "${VAR_UI:-}" = "true" ] && echo true || echo false)
+            source="repo variables"
+          fi
+          case "$infra" in
+            plan|apply) ;;
+            *) infra=skip ;;
+          esac
+          [ "$ui" = "true" ] || ui=false
+
+          echo "infra=$infra" >> "$GITHUB_OUTPUT"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "::notice::Resolved from $source — terraform: $infra, UI deploy: $ui"
+
+          if [ "$infra" = "apply" ] && [ "$EVENT" != "workflow_dispatch" ]; then
+            echo "::warning::BEACON_INFRA=apply on a $EVENT event — Terraform is applying with nobody reading the plan. Unset the variable after this deploy window."
+          fi
+          if [ "$infra" = "skip" ] && [ "$ui" = "false" ]; then
+            echo "::notice::Nothing to deploy — the test gate still runs. Set BEACON_INFRA=plan|apply and/or BEACON_DEPLOY_ENABLED=true, then re-run this workflow to deploy."
+          fi
+
+  # UIFPE-167: the test gate runs on EVERY push touching the stack, whatever
+  # the deploy latches say — before, it was skipped unless a deploy was
+  # requested, so nothing on develop ever ran beacon's suites. The infra and
+  # ui jobs still need it green AND their own latch.
+  tests:
+    name: Test gate
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: pytest
+        run: |
+          # The RUNTIME deps of the code under test (fastapi, sqlglot, pyyaml,
+          # boto3) come from src/requirements.txt — the qe/*/requirements-dev
+          # files carry only test tooling. Omitting this line passes locally on
+          # a machine that happens to have them and fails in CI on collection.
+          pip install -r stacks/beacon/src/requirements.txt
+          pip install -r stacks/beacon/qe/export/requirements-dev.txt
+          pip install -r stacks/beacon/qe/control_panel/requirements-dev.txt
+          python -m pytest stacks/beacon/qe -q
+      # UIFPE-167: the wizard's feed/join rules (ui/src/lib) are unit-tested
+      # with vitest — same node setup as the ui job below
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: stacks/beacon/ui/package-lock.json
+      - name: vitest
+        working-directory: stacks/beacon/ui
+        run: |
+          npm ci
+          npm test
+
+  infra:
+    name: Terraform ${{ needs.resolve.outputs.infra }} (Beacon stack)
+    needs: [resolve, tests]
+    if: needs.resolve.outputs.infra != 'skip'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: stacks/beacon/infrastructure/terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Init + validate
+        run: |
+          terraform init -input=false -backend-config=backends/dev.hcl
+          terraform validate
+
+      - name: Plan
+        run: terraform plan -input=false -var-file=envs/dev.tfvars -out=tf.plan
+
+      # ---- apply path only below -------------------------------------------
+      # First-deploy bootstrap, same sequence the sandbox rehearsal proved:
+      #   1. the data bucket alone (targeted) — the Lambda functions reference
+      #      an S3 object that must exist before the full apply creates them
+      #   2. stage the beacon-lambdas zip at code/beacon-lambdas.zip
+      #   3. full apply
+      #   4. stage the source zip and run both CodeBuild image builds
+      #   5. bounce the API service so it picks up the freshly pushed :latest
+      # Re-runs are idempotent: the targeted apply is a no-op once the bucket
+      # exists, and stale zips are simply overwritten.
+      - name: Bootstrap data bucket (apply only)
+        if: needs.resolve.outputs.infra == 'apply'
+        run: terraform apply -input=false -auto-approve -var-file=envs/dev.tfvars -target=aws_s3_bucket.data
+
+      - name: Stage Lambda zip (apply only)
+        if: needs.resolve.outputs.infra == 'apply'
+        working-directory: stacks/beacon/src/apps
+        run: |
+          # UIFPE-438: pure code, no vendored deps — paramiko went with the
+          # in-Lambda sftp path (delivery rides Transfer Family connectors,
+          # boto3 ships in the Lambda runtime).
+          build="$RUNNER_TEMP/lambdas-build"
+          mkdir -p "$build"
+          cp -r beacon_export "$build/"
+          # UIFPE-543: the Notifications client moved to the shared platform
+          # package; without this copy the deliver Lambda fails on import.
+          cp -r "$GITHUB_WORKSPACE/platform/python/pearson_notifications" "$build/"
+          find "$build" -type d -name __pycache__ -prune -exec rm -rf {} +
+          (cd "$build" && zip -qr "$RUNNER_TEMP/beacon-lambdas.zip" .)
+          aws s3 cp "$RUNNER_TEMP/beacon-lambdas.zip" "s3://$STACK-data/code/beacon-lambdas.zip"
+          # UIFPE-200: hand terraform the zip's hash — the functions reference a
+          # FIXED s3 key, so without source_code_hash terraform never notices new
+          # code and the deployed lambdas silently stay stale
+          echo "TF_VAR_lambda_zip_hash=$(openssl dgst -sha256 -binary "$RUNNER_TEMP/beacon-lambdas.zip" | base64 -w0)" >> "$GITHUB_ENV"
+
+      # UIFPE-226: the control-panel API as a zip Lambda (the Echo pattern).
+      # Vendored deps are installed on this runner — ubuntu x86_64, matching
+      # the python3.12 x86_64 Lambda runtime, so binary wheels (pydantic-core)
+      # land correctly. boto3 comes from the Lambda runtime itself.
+      - name: Stage API Lambda zip (apply only)
+        if: needs.resolve.outputs.infra == 'apply'
+        working-directory: stacks/beacon/src
+        run: |
+          build="$RUNNER_TEMP/api-lambda"
+          mkdir -p "$build"
+          python3 -m pip install --quiet --target "$build" \
+            fastapi==0.128.0 mangum==0.19.0 sqlglot==30.15.0 pyyaml==6.0.3
+          cp -r apps/control_panel apps/beacon_export libs/dynamic_mapping "$build/"
+          cp -r "$GITHUB_WORKSPACE/platform/python/pearson_notifications" "$build/"
+          find "$build" -type d -name __pycache__ -prune -exec rm -rf {} +
+          (cd "$build" && zip -qr "$RUNNER_TEMP/beacon-api.zip" .)
+          aws s3 cp "$RUNNER_TEMP/beacon-api.zip" "s3://$STACK-data/code/beacon-api.zip"
+          echo "TF_VAR_api_lambda_zip_hash=$(openssl dgst -sha256 -binary "$RUNNER_TEMP/beacon-api.zip" | base64 -w0)" >> "$GITHUB_ENV"
+
+      # The transform job's entry script and engine zip (UIFPE-209), restaged
+      # every apply so S3 never drifts from the repo — the same reason the
+      # Lambda zip carries a content hash (UIFPE-200).
+      - name: Stage Glue transform artifacts (apply only)
+        if: needs.resolve.outputs.infra == 'apply'
+        working-directory: stacks/beacon/src
+        run: |
+          (cd apps && zip -qr "$RUNNER_TEMP/beacon-engine.zip" beacon_export -i '*.py')
+          (cd libs && zip -qr "$RUNNER_TEMP/beacon-engine.zip" dynamic_mapping -i '*.py')
+          aws s3 cp "$RUNNER_TEMP/beacon-engine.zip" "s3://$STACK-data/code/glue/beacon-engine.zip"
+          aws s3 cp apps/beacon_export/glue_entrypoint.py "s3://$STACK-data/code/glue/glue_entrypoint.py"
+
+      # XML rendering on Glue (UIFPE-250): spark-xml was baked into the retired
+      # Fargate image; the managed Glue runtime must be handed the jars via
+      # --extra-jars (glue.tf). Fetched from Maven Central with pinned SHA-256
+      # so a tampered or moved artifact fails the deploy instead of reaching
+      # the job's classpath. txw2 = the XML writer; xmlschema-core and
+      # scala-collection-compat are spark-xml's remaining compile deps not
+      # already on Glue's classpath (Spark provides commons-io and slf4j).
+      - name: Stage spark-xml jars for the Glue job (apply only)
+        if: needs.resolve.outputs.infra == 'apply'
+        run: |
+          jars=(
+            "com/databricks/spark-xml_2.12/0.18.0/spark-xml_2.12-0.18.0.jar 439c130f5d62424171c14120253363679a89fdacfc9a53bdba8dd71e240db4f9"
+            "org/glassfish/jaxb/txw2/3.0.2/txw2-3.0.2.jar b4bcf94fb0a759456e2521724513baec94b78e93127544af162e3cff08d93343"
+            "org/apache/ws/xmlschema/xmlschema-core/2.3.0/xmlschema-core-2.3.0.jar ab4ca02ae5634caf114161e40df94cb7e6bec2b33d372d46bd78189a4cb27dfa"
+            "org/scala-lang/modules/scala-collection-compat_2.12/2.9.0/scala-collection-compat_2.12-2.9.0.jar 873344f3788c84b6314afd20334b18a0821109a3635ecc71dac3598325e030ac"
+          )
+          for entry in "${jars[@]}"; do
+            path=${entry% *}; sha=${entry#* }; file=$(basename "$path")
+            curl -sfSo "$RUNNER_TEMP/$file" "https://repo1.maven.org/maven2/$path"
+            echo "$sha  $RUNNER_TEMP/$file" | sha256sum -c -
+            aws s3 cp "$RUNNER_TEMP/$file" "s3://$STACK-data/code/glue/jars/$file"
+          done
+
+      - name: Apply
+        if: needs.resolve.outputs.infra == 'apply'
+        run: terraform apply -input=false -auto-approve -var-file=envs/dev.tfvars
+
+      # No image builds: the API ships as a Lambda zip (UIFPE-226) and the
+      # transform as a Glue script + engine zip (UIFPE-209); the last container
+      # image (the parked Fargate pipeline) was deleted at UIFPE-215's
+      # probation exit. This stack is zero-image.
+
+      # The UI build needs this, and it is only knowable after the apply.
+      - name: Report the stack's URLs (apply only)
+        if: needs.resolve.outputs.infra == 'apply'
+        run: |
+          url=$(terraform output -raw ui_url 2>/dev/null || echo "")
+          apigw=$(terraform output -raw api_gateway_endpoint 2>/dev/null || echo "")
+          echo "::notice::Beacon CloudFront: ${url:-<no output>} | API Gateway: ${apigw:-<no output>}"
+          if [ -n "$url" ]; then
+            echo "::notice::Next: set repo variable BEACON_API_URL_DEV=$url/api and BEACON_DEPLOY_ENABLED=true, then re-run this workflow to publish the UI."
+          fi
+
+  ui:
+    name: Deploy UI to dev (shared RELAY CloudFront)
+    needs: [resolve, tests]
+    if: needs.resolve.outputs.ui == 'true'
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: stacks/beacon/ui/package-lock.json
+
+      - name: Build + deploy the Beacon UI (shared RELAY CloudFront)
+        working-directory: stacks/beacon/ui
+        env:
+          # Shared with the transform UI (platform-owned distribution). The
+          # --delete below is scoped to OUR m/beacon/ prefix — the RELAY
+          # app at the bucket root and other modules' prefixes are untouched.
+          UI_BUCKET: uif-echo-dev-ui
+          DISTRIBUTION_ID: E2K0DHB6UBC1N5
+          # Where the control-panel API lives for this UI build. Unset, the
+          # app calls same-origin /api — correct only on a distribution that
+          # routes /api/* to the Beacon ALB. From the shared distribution this
+          # must be an absolute URL, and that origin must also be listed in
+          # the API task's BEACON_UI_ORIGINS (CORS).
+          VITE_BEACON_API_URL: ${{ vars.BEACON_API_URL_DEV }}
+        run: |
+          # UIFPE-471. These two values are owned by
+          # stacks/echo/infrastructure/terraform (outputs ui_bucket_name and
+          # ui_cloudfront_id) but are literals here, because this workflow does
+          # not init that root. A rename there breaks this deploy silently and
+          # only AFTER the build - which is exactly what happened on
+          # 2026-09-20, when the bucket became uif-echo-dev-ui and the
+          # distribution became E2K0DHB6UBC1N5. Check both up front so the
+          # next rename fails in seconds with somewhere to look.
+          aws s3api head-bucket --bucket "$UI_BUCKET" 2>/dev/null || {
+            echo "::error::UI bucket $UI_BUCKET does not exist. It is owned by stacks/echo/infrastructure/terraform, output ui_bucket_name - read the current value from there and update this workflow."
+            exit 1
+          }
+          aws cloudfront get-distribution --id "$DISTRIBUTION_ID" >/dev/null 2>&1 || {
+            echo "::error::CloudFront distribution $DISTRIBUTION_ID does not exist. It is owned by the same Terraform root, output ui_cloudfront_id."
+            exit 1
+          }
+          npm ci
+          npm run build
+          aws s3 sync dist/ "s3://$UI_BUCKET/m/beacon/" --delete
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/m/beacon/*"
+          echo "::notice::UI live at https://d2dqf4ghal7j09.cloudfront.net/m/beacon/index.html#/m/beacon"

@@ -1,0 +1,66 @@
+name: Domain Checklist Sync
+
+# Ticks the ★-starred, CI-verified boxes in a shipped domain's
+# DOMAIN-CHECKLIST.md so the checklist reflects real, mechanically-confirmed
+# state instead of drifting from a hand-ticked copy. Only flips "- [ ]" to
+# "- [x]" on the three lines domain-ci.yml's structural gate already checks
+# (schema registered, one Dockerfile, qe/ present) — never unchecks a box,
+# never invents prose, never runs unless the triggering Domain CI run itself
+# succeeded (so every box it ticks is backed by a green run, not a guess).
+
+on:
+  workflow_run:
+    workflows: ["Domain CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  sync-checklist:
+    name: Tick CI-verified checklist boxes
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Tick CI-verified boxes
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          # (marker substring in the checklist line, path that must exist to tick it)
+          CHECKS = [
+              ("Schema registered", "src/schemas"),
+              ("Unit + contract tests and QE strategy in `qe/`", "qe"),
+              ("builds the one container image", "src/Dockerfile"),
+          ]
+
+          for domain_dir in sorted(pathlib.Path("domains").glob("*/")):
+              checklist = domain_dir / "DOMAIN-CHECKLIST.md"
+              if not checklist.exists():
+                  continue
+              lines = checklist.read_text().splitlines()
+              changed = False
+              for i, line in enumerate(lines):
+                  if "- [ ]" not in line:
+                      continue
+                  for marker, relpath in CHECKS:
+                      if marker in line and (domain_dir / relpath).exists():
+                          lines[i] = line.replace("- [ ]", "- [x]", 1)
+                          changed = True
+              if changed:
+                  checklist.write_text("\n".join(lines) + "\n")
+                  print(f"updated {checklist}")
+          PY
+
+      - name: Commit if changed
+        run: |
+          set -euo pipefail
+          git config user.name "uif-bot"
+          git config user.email "uif-bot@users.noreply.github.com"
+          git add domains/*/DOMAIN-CHECKLIST.md
+          git diff --cached --quiet || git commit -m "chore: sync DOMAIN-CHECKLIST.md structural boxes to CI state [skip ci]"
+          git diff --cached --quiet || git push

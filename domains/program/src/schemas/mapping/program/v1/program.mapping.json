@@ -1,0 +1,494 @@
+{
+  "$schema": "../../../../../../../stacks/apicurio/standards/gold-attribute-mapping.schema.json",
+  "domain": "program",
+  "table": "gold_program.program",
+  "registry": {
+    "group": "program",
+    "artifact": "program.program.mapping",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "drivingTable": "MTL_SYSTEM_ITEMS_B",
+  "entityKey": [
+    {
+      "goldColumn": "inventoryItemId",
+      "drivingColumn": "INVENTORY_ITEM_ID"
+    },
+    {
+      "goldColumn": "organizationId",
+      "drivingColumn": "ORGANIZATION_ID"
+    }
+  ],
+  "transforms": {
+    "programImageUrl": {
+      "description": "Normalize program cover-image URLs: DAM paths (start /P or /A — group 1423 carries both program-path and product-path images, confirmed on the 2026-08-20 first load) get the DAM host + asset-space prefix; site-relative paths (/coverimage..., /bigcovers...) get the images.pearson.com host; everything else (absolute URLs, Oracle TBD/N-A sentinels) passes through unchanged. Same trigger set as gold_product.product's pearsonImageUrl.",
+      "cases": [
+        {
+          "when": {
+            "op": "startsWith",
+            "values": [
+              "/P",
+              "/A"
+            ]
+          },
+          "then": {
+            "op": "prepend",
+            "text": "https://images.pearson.com/i/79475d28-e560-442f-9d0c-afceca8a145a"
+          }
+        },
+        {
+          "when": {
+            "op": "like",
+            "values": [
+              "/coverimage%",
+              "/bigcovers%"
+            ]
+          },
+          "then": {
+            "op": "prepend",
+            "text": "https://images.pearson.com"
+          }
+        }
+      ],
+      "else": "keep"
+    }
+  },
+  "batch": {
+    "requestedBy": "Reyas Ahamed H",
+    "targetDate": "2026-08-11",
+    "backfillMode": "silent",
+    "newChannel": null
+  },
+  "columns": [
+    {
+      "goldColumnName": "inventoryItemId",
+      "businessDescription": "Oracle internal surrogate. Part of the natural key.",
+      "kind": "scalar",
+      "dataType": "integer",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "INVENTORY_ITEM_ID",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": false
+      },
+      "nullable": false,
+      "notes": "Entity-key column; template dataType bigint normalized to integer. Channels all N as submitted - stored on every row, carried by no consumer feed, the same treatment gold_product.product gives its key columns."
+    },
+    {
+      "goldColumnName": "organizationId",
+      "businessDescription": "Oracle internal surrogate. Part of the natural key.",
+      "kind": "scalar",
+      "dataType": "integer",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "ORGANIZATION_ID",
+        "filter": "ORGANIZATION_ID = 82"
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": false
+      },
+      "nullable": false,
+      "notes": "ORGANIZATION_ID = 82 arrived in the template's Transform column, but it is a row FILTER - recorded structurally here instead. It is really an ENTITY-scope filter (which rows are programs): the intake contract has no entity-level filter field yet, and gold_product.product carries its equivalent (SEGMENT1 LIKE 'A%') in the manifest sot_filter. Resolve when the manifest is generated."
+    },
+    {
+      "goldColumnName": "programId",
+      "businessDescription": "Pearson Program Identifier",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "SEGMENT1",
+        "filter": "SEGMENT1 LIKE 'P2%'"
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": false,
+      "notes": "The template's Transform column held \"like 'P2%'\" - a row filter, not a transform, so it is recorded structurally. Entity-scope, same caveat as organizationId."
+    },
+    {
+      "goldColumnName": "description",
+      "businessDescription": "Program Description (Internal)",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "DESCRIPTION",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": false,
+      "notes": null
+    },
+    {
+      "goldColumnName": "longDescription",
+      "businessDescription": "Program Description (External)",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_TL",
+        "column": "LONG_DESCRIPTION",
+        "filter": "LANGUAGE = 'US'",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            },
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "ORGANIZATION_ID",
+              "rightColumn": "ORGANIZATION_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "Translations table is (item, org)-grained, so it joins on the FULL entity key - mirroring gold_product.product.longDescription. Filter whitespace normalized from the template's LANGUAGE='US'."
+    },
+    {
+      "goldColumnName": "relevanceValue",
+      "businessDescription": "Program Relevance Value",
+      "kind": "scalar",
+      "dataType": "integer",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "N_EXT_ATTR1",
+        "filter": "ATTR_GROUP_ID = 1422",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "programFamilyCatalogCode",
+      "businessDescription": "Display Catalog",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR1",
+        "filter": "ATTR_GROUP_ID = 1422",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "coverImageLargeUrl",
+      "businessDescription": "Program Image URL (Large)",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR1",
+        "filter": "ATTR_GROUP_ID = 1423",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": {
+        "rule": "programImageUrl"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "URL normalization via the programImageUrl rule (mapping owner, 2026-08-10): the same shape as gold_product.product's pearsonImageUrl but triggering on the /P DAM prefix instead of /A. Pass-through keeps absolute URLs and the Oracle TBD/N-A sentinels as-is, matching product's keep-source-data rule. CONFIRMED by the mapping owner 2026-08-11: /P is the correct DAM prefix for program images, and the DAM asset space is the SAME as product's, so the inherited host + GUID is right. The /coverimage% and /bigcovers% site-relative branches are retained on the owner's expectation that those shapes may occur here too - they are inherited from product and not yet observed in ATTR_GROUP_ID 1423, but an unmatched branch is inert, so keeping them costs nothing and dropping them could lose real values. Worth confirming against the first load."
+    },
+    {
+      "goldColumnName": "programOwnerName",
+      "businessDescription": "Program Owner",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR1",
+        "filter": "ATTR_GROUP_ID = 1463",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "inventoryItemStatus",
+      "businessDescription": "Inventory item status code",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "INVENTORY_ITEM_STATUS_CODE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "parentProductId",
+      "businessDescription": "Parent Product of the Program",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "SEGMENT1",
+        "filter": "ATTR_GROUP_ID = 1421 link, then the per-catalog parent test — see notes",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "SEGMENT1",
+              "rightColumn": "C_EXT_ATTR1"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "derivation": {
+        "sql": "WITH parent_named AS (\n  SELECT DISTINCT C_EXT_ATTR9 AS parent_ppid\n  FROM items_ext\n  WHERE ATTR_GROUP_ID = 1401\n    AND C_EXT_ATTR9 IS NOT NULL\n),\nparent_self AS (\n  SELECT DISTINCT CAST(a1164.INVENTORY_ITEM_ID AS BIGINT) AS iid,\n                  CAST(a1164.ORGANIZATION_ID  AS BIGINT) AS oid\n  FROM items_ext a1164\n  JOIN items_ext a741\n    ON a741.ATTR_GROUP_ID = 741\n   AND CAST(a741.INVENTORY_ITEM_ID AS BIGINT) = CAST(a1164.INVENTORY_ITEM_ID AS BIGINT)\n  WHERE a1164.ATTR_GROUP_ID = 1164\n    AND a1164.C_EXT_ATTR2 IS NOT NULL\n    AND a1164.C_EXT_ATTR2 = a741.C_EXT_ATTR8\n)\nSELECT link.C_EXT_ATTR1     AS program_ppid,\n       min(prod.SEGMENT1)   AS parentProduct\nFROM items_ext link\nJOIN items_all prod\n  ON CAST(prod.INVENTORY_ITEM_ID AS BIGINT) = CAST(link.INVENTORY_ITEM_ID AS BIGINT)\n AND CAST(prod.ORGANIZATION_ID AS BIGINT)   = 82\nLEFT JOIN parent_named pn\n  ON pn.parent_ppid = prod.SEGMENT1\nLEFT JOIN parent_self ps\n  ON ps.iid = CAST(prod.INVENTORY_ITEM_ID AS BIGINT)\n AND ps.oid = CAST(prod.ORGANIZATION_ID AS BIGINT)\nWHERE link.ATTR_GROUP_ID = 1421\n  AND link.C_EXT_ATTR1 IS NOT NULL\n  AND ((prod.ITEM_CATALOG_GROUP_ID =  10002 AND pn.parent_ppid IS NOT NULL)\n    OR (prod.ITEM_CATALOG_GROUP_ID <> 10002 AND ps.iid IS NOT NULL))\nGROUP BY 1",
+        "keyedBy": [
+          {
+            "queryColumn": "program_ppid",
+            "entityColumn": "SEGMENT1"
+          }
+        ],
+        "valueColumn": "parentProduct",
+        "reads": {
+          "items_all": [
+            "INVENTORY_ITEM_ID",
+            "ITEM_CATALOG_GROUP_ID",
+            "ORGANIZATION_ID",
+            "SEGMENT1"
+          ],
+          "items_ext": [
+            "ATTR_GROUP_ID",
+            "C_EXT_ATTR1",
+            "C_EXT_ATTR2",
+            "C_EXT_ATTR8",
+            "C_EXT_ATTR9",
+            "INVENTORY_ITEM_ID",
+            "ORGANIZATION_ID"
+          ]
+        }
+      },
+      "notes": "DERIVED — carries its own query (derivation.sql, ADR-0008: the query is the contract); a change to it is an engineer's plan while the shipped SQL keeps its pre-wrap shape. Three hops: program --(EAV group 1421, linked on the program's ppid as a STRING)--> its associated products --> the one that qualifies as parent. The test differs by catalog group. DIGITAL (ITEM_CATALOG_GROUP_ID = 10002): the product is the parent because a SIBLING names it, i.e. some group-1401 row carries this product's ppid in C_EXT_ATTR9 (parentPPID); the 1401 row sits on the child, so it is an existence test against other items. NON-DIGITAL: the product is the top of its own tree, i.e. its own group-1164 C_EXT_ATTR2 (ParentISBN13) equals its own group-741 C_EXT_ATTR8 (ISBN13) — self-referential and item-local. Where more than one product qualifies, min(SEGMENT1) is taken: a deterministic pick is required because an unordered 'first' would move the canonical hash between identical runs and ping every consumer forever (A8). Source query confirmed correct by the mapping owner 2026-08-12."
+    },
+    {
+      "goldColumnName": "associatedProducts",
+      "businessDescription": "Associated Products",
+      "kind": "nested",
+      "joinKey": "EGO_MTL_SY_ITEMS_EXT_B.C_EXT_ATTR1 = program.SEGMENT1 (ATTR_GROUP_ID 1421) -> MTL_SYSTEM_ITEMS_B.INVENTORY_ITEM_ID at ORGANIZATION_ID = 82 -> SEGMENT1",
+      "filter": "ATTR_GROUP_ID = 1421",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "value",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "MTL_SYSTEM_ITEMS_B",
+            "column": "SEGMENT1",
+            "filter": null
+          }
+        }
+      ],
+      "derivation": {
+        "sql": "SELECT link.C_EXT_ATTR1                          AS program_ppid,\n       array_sort(collect_list(prod.SEGMENT1))    AS associatedProducts\nFROM items_ext link\nJOIN items_all prod\n  ON CAST(prod.INVENTORY_ITEM_ID AS BIGINT) = CAST(link.INVENTORY_ITEM_ID AS BIGINT)\n AND CAST(prod.ORGANIZATION_ID AS BIGINT)   = 82\nWHERE link.ATTR_GROUP_ID = 1421\n  AND link.C_EXT_ATTR1 IS NOT NULL\nGROUP BY 1",
+        "keyedBy": [
+          {
+            "queryColumn": "program_ppid",
+            "entityColumn": "SEGMENT1"
+          }
+        ],
+        "valueColumn": "associatedProducts",
+        "reads": {
+          "items_all": [
+            "INVENTORY_ITEM_ID",
+            "ORGANIZATION_ID",
+            "SEGMENT1"
+          ],
+          "items_ext": [
+            "ATTR_GROUP_ID",
+            "C_EXT_ATTR1",
+            "INVENTORY_ITEM_ID"
+          ]
+        }
+      },
+      "notes": "Value array (one string per associated product), sorted by the value itself - the shape gold_product.product.webConsumingSystem/programPpid use. TWO-HOP: rows come from the EAV group 1421 link, then resolve to the associated product's SEGMENT1. Template's verbatim source SQL: select product.segment1 from mtl_system_items_b main JOIN EGO_MTL_SY_ITEMS_EXT_B pf ON pf.C_EXT_ATTR1 = main.segment1 AND pf.ATTR_GROUP_ID = 1421 JOIN mtl_system_items_b product ON pf.inventory_item_id = product.inventory_item_id AND product.organization_id = 82."
+    },
+    {
+      "goldColumnName": "relatedPrograms",
+      "businessDescription": "Related Programs",
+      "kind": "nested",
+      "joinKey": "MTL_RELATED_ITEMS.(INVENTORY_ITEM_ID, ORGANIZATION_ID) = program entity key -> RELATED_ITEM_ID -> MTL_SYSTEM_ITEMS_B.SEGMENT1; RELATIONSHIP_TYPE_ID -> FND_LOOKUP_VALUES_VL.LOOKUP_CODE (LOOKUP_TYPE = 'MTL_RELATIONSHIP_TYPES')",
+      "filter": "ITEM_CATALOG_GROUP_ID IN (1001, 13001) AND INVENTORY_ITEM_STATUS_CODE NOT IN ('ERROR', 'DELETE')",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "relatedProgramId",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "MTL_SYSTEM_ITEMS_B",
+            "column": "SEGMENT1",
+            "filter": null
+          }
+        },
+        {
+          "name": "relationshipType",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "FND_LOOKUP_VALUES_VL",
+            "column": "MEANING",
+            "filter": "LOOKUP_TYPE = 'MTL_RELATIONSHIP_TYPES' AND ENABLED_FLAG = 'Y'",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_RELATED_ITEMS",
+                  "leftColumn": "RELATIONSHIP_TYPE_ID",
+                  "rightColumn": "LOOKUP_CODE"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "derivation": {
+        "sql": "WITH rel_type_map AS (\n  SELECT LOOKUP_CODE     AS code,\n         max(MEANING)    AS relationshipType\n  FROM rel_types\n  WHERE LOOKUP_TYPE = 'MTL_RELATIONSHIP_TYPES'\n    AND ENABLED_FLAG = 'Y'\n  GROUP BY 1\n)\nSELECT CAST(r.INVENTORY_ITEM_ID AS BIGINT) AS iid,\n       CAST(r.ORGANIZATION_ID AS BIGINT)   AS oid,\n       transform(\n         array_sort(collect_list(named_struct(\n           's1', rp.SEGMENT1,\n           's2', lk.relationshipType,\n           'p', named_struct(\n             'programPpid',      rp.SEGMENT1,\n             'relationshipType', lk.relationshipType\n           )))),\n         x -> x.p) AS relatedPrograms\nFROM related r\nJOIN items_all pgm\n  ON CAST(pgm.INVENTORY_ITEM_ID AS BIGINT) = CAST(r.INVENTORY_ITEM_ID AS BIGINT)\n AND CAST(pgm.ORGANIZATION_ID AS BIGINT)   = CAST(r.ORGANIZATION_ID AS BIGINT)\n AND pgm.ITEM_CATALOG_GROUP_ID IN (1001, 13001)\n AND pgm.INVENTORY_ITEM_STATUS_CODE NOT IN ('ERROR', 'DELETE')\nJOIN items_all rp\n  ON CAST(rp.INVENTORY_ITEM_ID AS BIGINT) = CAST(r.RELATED_ITEM_ID AS BIGINT)\n AND CAST(rp.ORGANIZATION_ID AS BIGINT)   = CAST(r.ORGANIZATION_ID AS BIGINT)\n AND rp.ITEM_CATALOG_GROUP_ID IN (1001, 13001)\n AND rp.INVENTORY_ITEM_STATUS_CODE NOT IN ('ERROR', 'DELETE')\n AND rp.SEGMENT1 LIKE 'P2%'\nLEFT JOIN rel_type_map lk\n  ON CAST(CAST(r.RELATIONSHIP_TYPE_ID AS BIGINT) AS STRING) = lk.code\nGROUP BY 1, 2",
+        "keyedBy": [
+          {
+            "queryColumn": "iid",
+            "entityColumn": "INVENTORY_ITEM_ID"
+          },
+          {
+            "queryColumn": "oid",
+            "entityColumn": "ORGANIZATION_ID"
+          }
+        ],
+        "valueColumn": "relatedPrograms",
+        "reads": {
+          "items_all": [
+            "INVENTORY_ITEM_ID",
+            "INVENTORY_ITEM_STATUS_CODE",
+            "ITEM_CATALOG_GROUP_ID",
+            "ORGANIZATION_ID",
+            "SEGMENT1"
+          ],
+          "rel_types": [
+            "ENABLED_FLAG",
+            "LOOKUP_CODE",
+            "LOOKUP_TYPE",
+            "MEANING"
+          ],
+          "related": [
+            "INVENTORY_ITEM_ID",
+            "ORGANIZATION_ID",
+            "RELATED_ITEM_ID",
+            "RELATIONSHIP_TYPE_ID"
+          ]
+        }
+      },
+      "notes": "Struct array (related program + relationship type), sorted by programPpid - the shape gold_product.product.contributors uses. Sources MTL_RELATED_ITEMS and FND_LOOKUP_VALUES_VL are both present in uif_echo_dev_silver_mdm (both carry _silver_updated_at), so there is no Bronze->Silver prerequisite. ALIASING: programPpid reads MTL_SYSTEM_ITEMS_B for the RELATED item, not the program's own row - the SQL needs a SECOND alias over the driving table, because Phase 2 replaces the driving alias's temp view. TYPES: RELATIONSHIP_TYPE_ID is numeric and LOOKUP_CODE is a string, so the join needs an explicit CAST; confirm the _VL language view returns one row per code after the LOOKUP_TYPE/ENABLED_FLAG predicates. CDC: FND_LOOKUP_VALUES_VL has no entity-key column, so its key_mapping is the constant org fan-out organizationId = 82 (product's org_params pattern). STABILITY: if one program relates to the same program under two relationship types, programPpid alone ties - add relationshipType as a sort tie-breaker (ADR-0003 array_sort_keys)."
+    }
+  ]
+}

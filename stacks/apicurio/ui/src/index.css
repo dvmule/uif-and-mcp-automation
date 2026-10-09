@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    /* Mandatory in the Pearson type standard: Plus Jakarta Sans ships
+     * ligatures that the brand guideline disables. */
+    font-variant-ligatures: none;
+    /* Letter-spacing is 0 throughout. The only two exceptions are set
+     * locally where they occur: the uppercase `Current` version chip
+     * (.05em) and the header product name (-.01em). The previous -0.25px
+     * and word-spacing: 0.7px applied to every string in the app,
+     * including the mono identifiers and counts, and are gone.
+     *
+     * `font-feature-settings: 'ss01','cv11'` went with them: those are
+     * Inter's stylistic-set names. Plus Jakarta Sans has neither, so the
+     * declaration did nothing but imply a typeface this app does not use. */
+    letter-spacing: 0;
+  }
+
+  code,
+  pre {
+    @apply font-mono;
+  }
+}
+
+@layer components {
+  .data-table {
+    @apply w-full text-sm;
+  }
+  .data-table thead th {
+    @apply text-left text-xs font-medium uppercase tracking-wider text-ink-mute py-3 align-middle border-b border-paper-line;
+  }
+  .data-table tbody td {
+    /* Row rules are the lighter #F1F0F7, not the #E2E0F0 used for card
+     * borders — a table of 12 rows ruled in the card border colour reads
+     * as a grid rather than a list. */
+    @apply border-b border-paper-divider;
+    transition: padding-top 180ms ease, padding-bottom 180ms ease;
+  }
+  .data-table[data-density="compact"] tbody td {
+    @apply py-2;
+  }
+  .data-table[data-density="cozy"] tbody td {
+    @apply py-3;
+  }
+  .data-table tbody tr:hover {
+    @apply bg-paper-raised;
+    transition: background-color 150ms ease;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .data-table tbody td,
+    .data-table tbody tr:hover {
+      transition: none;
+    }
+  }
+
+  /* Monaco decorations for the schema code view's find. Monaco applies these
+   * class names itself, so they cannot be Tailwind utilities on an element —
+   * the values are the design's search-match pair and matched-row tint. */
+  .schema-find-line {
+    background: #fff9e0;
+  }
+  .schema-find-margin {
+    background: #fff9e0;
+  }
+  .schema-find-token {
+    background: #ffe67f;
+    border-radius: 2px;
+  }
+}

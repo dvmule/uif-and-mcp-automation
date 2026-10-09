@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // `vitest/globals` and `jest-dom` because the suite runs with
+    // `globals: true` and asserts with jest-dom matchers. Without them the
+    // test files cannot typecheck at all, which is why they used to be
+    // excluded — the same set `stacks/echo/ui` carries.
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  // Tests included, and the Playwright specs with them. They were excluded,
+  // so roughly 8k lines — a third of this app — had no type gate at all:
+  // `tsc -b` passed over them and Vitest transpiles without checking. Two of
+  // my own e2e helpers had type faults that only surfaced at runtime.
+  "include": ["src", "e2e"]
+}

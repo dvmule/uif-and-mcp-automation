@@ -1,0 +1,5 @@
+{
+  "_comment": "Single source of truth for UIF environments (the picklist). Consumed by scripts/env_config.py, infra/variables.tf validation, and infra/Makefile. Keep in sync with uif-relay-echo's environment set.",
+  "environments": ["dev", "uat", "prod"],
+  "default": "dev"
+}

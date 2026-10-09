@@ -1,0 +1,38 @@
+# State for the GOLD root of the uif-echo-uat-* stack.
+#
+# Beside the main root's own uat state, in the same bucket, under a key that
+# says which root it describes. The main root's backends/uat-uif.hcl uses
+# tfstate/infra-terraform.tfstate; this is its sibling. That qualifier was
+# already chosen with a second root in mind -- "infra-" only distinguishes
+# anything if something else shares the prefix.
+#
+# WHY NOT THE SHARED LEGACY BUCKET, WHICH IS WHERE GOLD'S DEV STATE LIVES.
+# backends/dev.s3.tfbackend puts dev's state in
+# pearson-ingestion-framework-tfstate-283556840805 under uif-echo-gold/dev/.
+# That predates the pattern the main root now follows for every greenfield
+# stack: state inside the stack's own data bucket, because "two stacks in one
+# account are isolated by name alone, so keeping each state inside the stack it
+# describes means a bucket policy or a lifecycle rule can never reach across".
+# uat follows the newer pattern. Gold's DEV backend is deliberately left where
+# it is -- moving live state is its own operation with its own risk, and it
+# buys nothing today.
+#
+# BOOTSTRAP ORDER, AND IT IS CIRCULAR. `terraform init` needs uif-echo-uat-data
+# to exist, and the MAIN root is what declares it (artifacts_bucket). So the
+# bucket must be created by hand before the first init of either root, then
+# imported so the main root's first apply does not fail with
+# BucketAlreadyOwnedByYou. The main root's backends/uat-uif.hcl says the same
+# thing and assigns the job to bootstrap-environment.sh.
+#
+# Enable versioning on it at creation. Without it a corrupted state has no
+# previous copy.
+#
+# The filename keeps this directory's `.s3.tfbackend` convention, which is also
+# product's, stacks/event's and delivery-lab's. The main root uses `.hcl`. Both
+# conventions are live in this repo, which is why the deploy workflows name a
+# backend path per root rather than assuming one extension for both.
+bucket       = "uif-echo-uat-data"
+key          = "tfstate/gold-terraform.tfstate"
+region       = "eu-west-1"
+use_lockfile = true
+encrypt      = true

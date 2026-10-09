@@ -1,0 +1,46 @@
+# Ruff config for the whole apicurio stack — src/ AND qe/ under ONE ruleset.
+#
+# This lives at the stack root, not in src/pyproject.toml, on purpose. Ruff
+# resolves config by walking up from each file, so a [tool.ruff] section in
+# src/pyproject.toml applied to src/ only; qe/ found no config in its ancestor
+# chain and was silently linted under ruff's built-in defaults instead
+# (line-length 88, a different rule selection). Two trees, two rulesets, and
+# qe/ reported zero E501 despite the *tighter* limit. A stack-root ruff.toml is
+# the nearest config for both trees, so both are now linted identically, and it
+# matches how CI invokes ruff (`working-directory: stacks/<stack>`, see
+# .github/workflows/stacks-ci.yml).
+#
+# src/pyproject.toml keeps its packaging metadata — including the
+# [tool.setuptools.packages.find] pin that UIFPE-335 added so `uv sync` can
+# still resolve the flat layout — and carries no lint config at all.
+
+line-length = 100
+target-version = "py312"
+
+# `app` is first-party but lives under src/, one level below this config.
+# Without this, isort (I001) would classify `from app...` as third-party and
+# sort it into the wrong block — in both src/ and qe/.
+src = ["src"]
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "N", "S"]
+ignore = ["S101"]  # allow asserts — the qe/ suite is built on them
+
+[lint.per-file-ignores]
+# B008 flags a function call in an argument default. In FastAPI, `Depends(...)`
+# in the default IS the framework's dependency-injection contract — FastAPI
+# reads it off the signature and never lets Python evaluate it as a real
+# default. Rewriting these call sites would break the routing, so the rule is
+# wrong for exactly two layers: the HTTP routers and the dependency providers
+# they pull from. Scoped to those, so B008 still fires anywhere else.
+"src/app/api/v1/*.py" = ["B008"]
+"src/app/core/dependencies.py" = ["B008"]
+
+# S603 flags subprocess.run as executing untrusted input. In this directory
+# that is backwards: every test here exists to execute the stack's own shell
+# scripts, so subprocess IS the thing under test, not an incidental call. The
+# arguments it warns about are a script path built from __file__ and a
+# fixture path from pytest's tmp_path -- both controlled by the test itself,
+# not external input. Scoped to this directory so S603 stays live everywhere
+# else in the stack.
+"qe/tests/release/*.py" = ["S603"]

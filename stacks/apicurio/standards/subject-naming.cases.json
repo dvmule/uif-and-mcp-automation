@@ -1,0 +1,343 @@
+{
+  "$comment": "The single corpus behind every subject-shape check. Loaded by pytest (BFF) and vitest (UI) so a regex that drifts in one language fails that language's tests. Standard: subject-naming.md. Decision: ADR-0023.",
+  "pattern": "^[a-z][a-z0-9]*\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*\\.(?:mapping|gold|api-created|api-updated|event-created|event-updated|message-created|message-updated)$",
+  "patternNote": "Deliberately uses non-capturing groups only. Named groups are spelled (?P<n>...) in Python and (?<n>...) in JavaScript, so a pattern carrying them cannot be shared by both. Each caller adds its own named groups if it needs the parts; this string is the portable shape check.",
+  "claimedNote": "`claimed` says whether the SERVER RULE judges this subject, which is not the same question as whether the pattern matches it. The registry holds artifacts governed by other standards, so the rule judges a subject only when its third segment is one of `types` — the evidence of claiming this grammar. claimed=false means the rule must stay silent (flagging it would make the compliance verdict lie about an artifact the rule has no authority over); claimed=true means it must fail. Every entry in `invalid` is rejected by `pattern` either way. The strict check across the whole repository, which knows the full out-of-scope allowlist, is a repo test instead.",
+  "types": [
+    "mapping",
+    "gold",
+    "api-created",
+    "api-updated",
+    "event-created",
+    "event-updated",
+    "message-created",
+    "message-updated"
+  ],
+  "valid": [
+    {
+      "subject": "product.product.mapping",
+      "note": "the five types for one entity"
+    },
+    {
+      "subject": "product.product.gold"
+    },
+    {
+      "subject": "product.marketing-copy.gold",
+      "note": "kebab entity, from gold table marketing_copy"
+    },
+    {
+      "subject": "product.marketing-copy.mapping"
+    },
+    {
+      "subject": "price.price.gold",
+      "note": "entity name equals domain name"
+    },
+    {
+      "subject": "price.price.mapping"
+    },
+    {
+      "subject": "program.program.gold"
+    },
+    {
+      "subject": "program.program.mapping"
+    },
+    {
+      "subject": "stock.stock.gold"
+    },
+    {
+      "subject": "stock.stock.mapping"
+    },
+    {
+      "subject": "a.b.gold",
+      "note": "single-character slots are legal"
+    },
+    {
+      "subject": "hr.employee.gold",
+      "note": "a domain with no gold entity yet still parses"
+    },
+    {
+      "subject": "product.product.api-created",
+      "note": "api projection, registered per operation"
+    },
+    {
+      "subject": "product.product.api-updated",
+      "note": "api projection, registered per operation"
+    },
+    {
+      "subject": "product.product.event-created",
+      "note": "event projection, registered per operation"
+    },
+    {
+      "subject": "product.product.event-updated",
+      "note": "event projection, registered per operation"
+    },
+    {
+      "subject": "product.product.message-created",
+      "note": "message projection, registered per operation"
+    },
+    {
+      "subject": "product.product.message-updated",
+      "note": "message projection, registered per operation"
+    },
+    {
+      "subject": "stock.stock.api-created",
+      "note": "api projection, registered per operation"
+    },
+    {
+      "subject": "stock.stock.api-updated",
+      "note": "api projection, registered per operation"
+    }
+  ],
+  "invalid": [
+    {
+      "subject": "product-gold-master",
+      "why": "kebab form bent from the normative <entity>-<action>-data; no dot segments",
+      "claimed": false
+    },
+    {
+      "subject": "product-gold-attribute-mapping",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "product.gold-api-value",
+      "why": "UIFPE-523 transitional tier coordinate; two segments and a -value suffix",
+      "claimed": false
+    },
+    {
+      "subject": "product.gold-event-value",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "product.gold-message-value",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "stock.gold-api-value",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "product-created-data",
+      "why": "normative per-operation data schema; out of scope, ADR-0023 decision 2",
+      "claimed": false
+    },
+    {
+      "subject": "product-updated-data",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "pearson-event-envelope",
+      "why": "normative envelope artifact, group uif; out of scope",
+      "claimed": false
+    },
+    {
+      "subject": "product-events",
+      "why": "AsyncAPI document artifact; out of scope",
+      "claimed": false
+    },
+    {
+      "subject": "product-events-asyncapi",
+      "why": "the normative AsyncAPI form; out of scope",
+      "claimed": false
+    },
+    {
+      "subject": "product-api",
+      "why": "OpenAPI/REST contract per capabilities/api/guidelines.md; out of scope and NOT the api tier projection",
+      "claimed": false
+    },
+    {
+      "subject": "marketing-copy-api",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "stock-api",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "product-master-data-contract",
+      "why": "data contract; out of scope",
+      "claimed": false
+    },
+    {
+      "subject": "employee-classification",
+      "why": "field-classification policy; out of scope",
+      "claimed": false
+    },
+    {
+      "subject": "vocabulary",
+      "why": "Semantics capability artifact; governed by no standard",
+      "claimed": false
+    },
+    {
+      "subject": "knowledge-graph",
+      "why": "Knowledge Graph capability artifact",
+      "claimed": false
+    },
+    {
+      "subject": "a2a-routing",
+      "why": "A2A capability artifact",
+      "claimed": false
+    },
+    {
+      "subject": "commerce.order.placed-value",
+      "why": "legacy Kafka subject shape; demo seed data",
+      "claimed": false
+    },
+    {
+      "subject": "product.product-value",
+      "why": "same",
+      "claimed": false
+    },
+    {
+      "subject": "product.product.created",
+      "why": "ADR-0013's dotted per-operation form; 'created' is not a type token",
+      "claimed": false
+    },
+    {
+      "subject": "product.product.created.v2",
+      "why": "ADR-0013's .vN sibling model; majors are semver artifact versions here",
+      "claimed": false
+    },
+    {
+      "subject": "product.product.gold.v2",
+      "why": "no version segment: the major is the artifact's semver version",
+      "claimed": true
+    },
+    {
+      "subject": "product.product.gold.v1",
+      "why": "same",
+      "claimed": true
+    },
+    {
+      "subject": "product.product.messaging",
+      "why": "'messaging' is not the token; the wire value is 'message'",
+      "claimed": false
+    },
+    {
+      "subject": "product.product.channel",
+      "why": "'channel' is not in the type vocabulary",
+      "claimed": false
+    },
+    {
+      "subject": "product.product",
+      "why": "missing the type segment",
+      "claimed": false
+    },
+    {
+      "subject": "product.gold",
+      "why": "two segments; reads as entity.type with no domain",
+      "claimed": false
+    },
+    {
+      "subject": "gold",
+      "why": "one segment",
+      "claimed": false
+    },
+    {
+      "subject": "product.product.gold.extra",
+      "why": "a fourth segment is never valid",
+      "claimed": true
+    },
+    {
+      "subject": "Product.product.gold",
+      "why": "uppercase domain",
+      "claimed": true
+    },
+    {
+      "subject": "product.Product.gold",
+      "why": "uppercase entity",
+      "claimed": true
+    },
+    {
+      "subject": "product.product.GOLD",
+      "why": "uppercase type",
+      "claimed": false
+    },
+    {
+      "subject": "product.marketing_copy.gold",
+      "why": "snake_case entity; the gold table name is kebab-cased in a subject",
+      "claimed": true
+    },
+    {
+      "subject": "product..gold",
+      "why": "empty entity",
+      "claimed": true
+    },
+    {
+      "subject": ".product.gold",
+      "why": "empty domain",
+      "claimed": true
+    },
+    {
+      "subject": "product.product.",
+      "why": "empty type",
+      "claimed": false
+    },
+    {
+      "subject": "1product.product.gold",
+      "why": "domain must start with a letter",
+      "claimed": true
+    },
+    {
+      "subject": "product.-copy.gold",
+      "why": "entity must start with a letter",
+      "claimed": true
+    },
+    {
+      "subject": "product.copy-.gold",
+      "why": "entity must not end with a hyphen",
+      "claimed": true
+    },
+    {
+      "subject": "product.mark--copy.gold",
+      "why": "no double hyphen in an entity",
+      "claimed": true
+    },
+    {
+      "subject": "product product.gold",
+      "why": "whitespace",
+      "claimed": false
+    },
+    {
+      "subject": " product.product.gold",
+      "why": "leading whitespace",
+      "claimed": true
+    },
+    {
+      "subject": "product.product.gold ",
+      "why": "trailing whitespace",
+      "claimed": false
+    },
+    {
+      "subject": "",
+      "why": "empty",
+      "claimed": false
+    },
+    {
+      "subject": "product.product.api",
+      "why": "the bare channel type ADR-0023 shipped with; superseded by product.product.api-created / -updated, and still CLAIMED so it is rejected rather than ignored",
+      "claimed": true
+    },
+    {
+      "subject": "product.product.event",
+      "why": "the bare channel type ADR-0023 shipped with; superseded by product.product.event-created / -updated, and still CLAIMED so it is rejected rather than ignored",
+      "claimed": true
+    },
+    {
+      "subject": "product.product.message",
+      "why": "the bare channel type ADR-0023 shipped with; superseded by product.product.message-created / -updated, and still CLAIMED so it is rejected rather than ignored",
+      "claimed": true
+    },
+    {
+      "subject": "stock.stock.api",
+      "why": "the bare channel type ADR-0023 shipped with; superseded by stock.stock.api-created / -updated, and still CLAIMED so it is rejected rather than ignored",
+      "claimed": true
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.pearson.com/<domain>/<resource>-<action>-data/v1",
+  "title": "<Resource><Action> data",
+  "description": "Registered in the Pearson Enterprise Schema Registry (Apicurio) under group: <domain>, artifact: <domain>-<resource>-<action>-data. This is the CloudEvents `data` payload only — the envelope is the shared, centrally-registered artifact referenced from asyncapi.template.yaml, never redefined here (../../../stacks/apicurio/standards/apicurio-governance.md §3).",
+  "registry": {
+    "group": "<domain>",
+    "artifact": "<domain>-<resource>-<action>-data",
+    "compatibility": "BACKWARD"
+  },
+  "type": "object",
+  "required": ["id"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The aggregate id this event is about — also the partition/shard key (capabilities/event/guidelines.md §1)."
+    },
+    "billingAddress": {
+      "$ref": "https://schemas.pearson.com/common/address/v1"
+    },
+    "price": {
+      "$ref": "https://schemas.pearson.com/common/money/v1"
+    }
+  },
+  "additionalProperties": false
+}

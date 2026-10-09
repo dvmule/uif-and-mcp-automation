@@ -1,0 +1,12 @@
+# MCP onboarding file of the program domain (every UIF domain folder carries one from the moment
+# the domain is onboarded; capabilities/mcp/mcp-bridge.md). DATA only - the automation derives
+# everything else by convention:
+#   contract        : auto-resolved - this domain ships exactly one OpenAPI contract under src/api
+#                     (set `contract: src/api/<api>/openapi.yaml` only if that changes)
+#   mcp_enabled     : omitted = true (set `mcp_enabled: false` to keep an onboarded domain out of MCP)
+#   REST asset      : uif-program-api     route label: uif-program-api   source instance: uif-program-<env>
+#   upstream        : the COMMON UIF API upstream origin (anypoint-environments.yaml <env>.upstream_url)
+#   Bridge          : the SHARED uif-domains-mcp (listener /uif/domains) - never a per-domain Bridge
+domain: program
+contract: src/api/program/openapi.yaml  # this domain's MCP contract (it ships 2 OpenAPI contract(s) under src/api)
+source_asset_id: uif-program-api 

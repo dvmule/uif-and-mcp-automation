@@ -1,0 +1,37 @@
+[
+  {
+    "inventory_item_id": 1001,
+    "product_id": "BOOK-A",
+    "org_id": 101,
+    "isbn10": "0451524934",
+    "isbn13": "9780451524935"
+  },
+  {
+    "inventory_item_id": 1001,
+    "product_id": "BOOK-A",
+    "org_id": 102,
+    "isbn10": "0451524934",
+    "isbn13": "9780451524935"
+  },
+  {
+    "inventory_item_id": 1002,
+    "product_id": "BOOK-B",
+    "org_id": 101,
+    "isbn10": "0061120081",
+    "isbn13": "9780061120084"
+  },
+  {
+    "inventory_item_id": 1003,
+    "product_id": "PART-C",
+    "org_id": 101,
+    "isbn10": null,
+    "isbn13": null
+  },
+  {
+    "inventory_item_id": 1004,
+    "product_id": "PART-D",
+    "org_id": 101,
+    "isbn10": null,
+    "isbn13": null
+  }
+]

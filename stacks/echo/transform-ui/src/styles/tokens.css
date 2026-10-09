@@ -1,0 +1,138 @@
+/* RELAY design tokens: the same names and values as Echo's ui/src/index.css @theme
+   (pinned by ui/src/lib/__tests__/tokenParity.test.ts). index.css aliases its older
+   names onto these, so existing selectors keep working. Imported after index.css. */
+
+:root {
+  /* Brand */
+  --color-ink:          #1a1533;
+  --color-ink-soft:     #5d5779;
+  --color-ink-mute:     #6e6989;
+  --color-accent:       #512eab;
+  --color-accent-soft:  #edecf6;
+  --color-amber:        #ffce00;
+
+  /* Surfaces */
+  --color-paper:        #efeef7;
+  --color-paper-card:   #ffffff;
+  --color-paper-line:   #c1bfff;
+  --color-line:         #e3e1ef;
+  --color-paper-head:   #faf9ff;
+
+  /* Status: text colour, its tint, and the brighter run dots */
+  --color-signal-ok:        #0b6b4f;
+  --color-signal-ok-bg:     #e4f7f0;
+  --color-signal-warn:      #8a6d00;
+  --color-signal-warn-bg:   #fff7e0;
+  --color-signal-warn-line: #d9a800;
+  --color-signal-fail:      #b3261e;
+  --color-signal-fail-bg:   #fdedea;
+  --color-signal-live:      #0c7078;
+  --color-signal-live-bg:   #ddf6f5;
+  --color-dot-ok:           #1f9d55;
+  --color-dot-fail:         #e0453a;
+  --color-dot-mute:         #b9b5cc;
+
+  /* Type: one typeface everywhere, font-mono included */
+  --font-sans: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", Helvetica, Verdana, sans-serif;
+  --font-mono: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", Helvetica, Verdana, sans-serif;
+  --text-label: 11px;
+  --text-meta:  12px;
+  --text-body:  13px;
+  --text-page:  24px;
+
+  /* Radii and shadow */
+  --radius-card:  16px;
+  --radius-brand: 6px;
+  --shadow-card:  0 3px 12px 0 rgb(13 0 77 / 0.1);
+
+  /* Rail widths, as Echo's LabelledRail */
+  --rail-width: 212px;
+  --rail-width-collapsed: 64px;
+
+  /* Older names, aliased to the tokens above */
+  --success:        var(--color-signal-ok);
+  --success-bg:     var(--color-signal-ok-bg);
+  --warning-fg:     var(--color-signal-warn);
+  --warning-bg:     var(--color-signal-warn-bg);
+  --warning-border: var(--color-signal-warn-line);
+  --danger:         var(--color-signal-fail);
+  --danger-bg:      var(--color-signal-fail-bg);
+  --active:         var(--color-signal-live);
+  --active-bg:      var(--color-signal-live-bg);
+  --muted:          var(--color-ink-soft);
+  --muted-bg:       var(--color-paper-head);
+  --ink-muted:      var(--color-ink-mute);
+  --sunken:         var(--color-paper-head);
+  --mono:           var(--font-mono);
+
+  --focus-ring: 0 0 0 2px var(--card), 0 0 0 4px var(--amethyst);
+}
+
+/* ── StatusPill tones: ok / warn / fail (bad) / live / mute ──────────────── */
+.pill.ok   { background: var(--success-bg); color: var(--success); }
+.pill.warn { background: var(--warning-bg); color: var(--warning-fg); }
+.pill.bad  { background: var(--danger-bg);  color: var(--danger); }
+.pill.live { background: var(--active-bg);  color: var(--active); }
+.pill.mute { background: var(--muted-bg);   color: var(--muted); }
+
+/* A reason code riding along inside a pill: the verdict is the label, the code
+   is the evidence. */
+/* index.css's .pill is inline-block, not flex, so this needs its own spacing
+   rather than a gap on the parent. */
+.pill .why {
+  font-family: var(--font-mono); font-weight: 600; font-size: 10.5px;
+  opacity: .78; margin-left: 5px;
+}
+
+/* ── keyboard focus ──────────────────────────────────────────────────────── */
+input[type="text"]:focus-visible, select:focus-visible, textarea:focus-visible,
+button:focus-visible, a:focus-visible {
+  outline: none; box-shadow: var(--focus-ring); border-radius: 8px;
+}
+
+/* ── layout: keep wide content out of the page's scrollbar ───────────────── */
+/* index.css's .main is a flex child with the default min-width:auto, so it
+   cannot shrink below its content's min-content width — one wide table pushes
+   the whole shell sideways and the sidebar scrolls away with it. min-width:0
+   lets it shrink; .tablewrap then owns the horizontal scroll locally. */
+.main { min-width: 0; }
+.tablewrap { overflow-x: auto; }
+
+/* ── source grain (UIFPE-108 follow-on) ──────────────────────────────────── */
+/* How far a source's join reaches across the entity key. The bar is a
+   proportion of key columns covered, NOT a row count — magnitude needs
+   cardinality the offline catalog snapshot does not carry. */
+.cover { display: flex; align-items: center; gap: 8px; min-width: 128px; }
+.cover .bar {
+  flex: 1; height: 6px; min-width: 34px; border-radius: 3px;
+  background: var(--line); overflow: hidden;
+}
+.cover .bar i { display: block; height: 100%; border-radius: 3px;
+  background: var(--warning-border); }
+.cover .bar i.full { background: var(--good); }
+.cover .n { font-family: var(--font-mono); font-size: 11.5px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.keycol {
+  display: inline-block; font-family: var(--font-mono); font-size: 11.5px;
+  padding: 1px 6px; border-radius: var(--radius-brand); background: var(--sunken);
+  border: 1px solid var(--line); margin-right: 4px;
+}
+.keycol.off { color: var(--ink-muted); border-style: dashed; }
+
+/* ── consumer tiers ──────────────────────────────────────────────────────── */
+/* event ⊂ message ⊂ api is CONCENTRIC, not a severity scale, so size carries
+   the containment: the widest tier is the largest ring. Filled = included.
+   Three same-weight chips would need a legend to read; this does not. */
+.chan { display: inline-flex; align-items: center; gap: 3px; }
+.chan i { display: block; border-radius: 999px; border: 1.5px solid currentColor; }
+.chan .e { width: 6px; height: 6px; color: #0e7c86; }
+.chan .m { width: 8px; height: 8px; color: var(--amethyst); }
+.chan .a { width: 10px; height: 10px; color: var(--pearson-purple); }
+.chan .in { background: currentColor; }
+
+.factgrid { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px;
+  font-size: 12.5px; margin: 0; }
+.factgrid dt { color: var(--ink-muted); font-weight: 600; }
+.factgrid dd { margin: 0; font-family: var(--font-mono); font-size: 12px;
+  word-break: break-word; }

@@ -1,0 +1,90 @@
+{
+  "_comment": [
+    "IAM statements to ADD to the policy behind echo-dev-github-actions before",
+    "enable_ui_waf can be set true in envs/dev-uif.tfvars. This file is the",
+    "statement text only -- it is NOT applied by any script here, deliberately.",
+    "",
+    "WHY NOT APPLIED HERE: echo-dev-github-actions is SHARED with the live",
+    "echo-dev stack, unlike Apicurio's uif-apicurio-dev-deploy-policy, which",
+    "serves one stack and so could carry its own fix script",
+    "(stacks/apicurio/infrastructure/deploy/uif-apicurio-dev-deploy-policy-fix.sh).",
+    "Widening a shared role is not this change's call to make.",
+    "",
+    "EVIDENCE, not inference. aws iam simulate-principal-policy against",
+    "arn:aws:iam::283556840805:role/echo-dev-github-actions on 2026-09-22:",
+    "  implicitDeny  wafv2:CreateWebACL, GetWebACL, UpdateWebACL, DeleteWebACL",
+    "  implicitDeny  wafv2:CreateIPSet, GetIPSet",
+    "  implicitDeny  wafv2:GetRuleGroup",
+    "  implicitDeny  wafv2:PutLoggingConfiguration, TagResource",
+    "  allowed       wafv2:ListRuleGroups",
+    "  allowed       logs:CreateLogGroup, PutRetentionPolicy, TagResource",
+    "  allowed       cloudfront:UpdateDistribution, GetDistribution",
+    "So only the wafv2 actions are missing -- the CloudWatch log group and the",
+    "distribution update that waf.tf also needs are already granted. Re-run the",
+    "simulation before applying this; a role's policies change.",
+    "",
+    "SCOPING. The two owned resource types are scoped to this stack's own ARNs.",
+    "CLOUDFRONT-scope WAFv2 ARNs are global/ under us-east-1 regardless of the",
+    "origin's region -- that is the ARN shape AWS uses, not a typo. The trailing",
+    "/* is the resource id WAF appends; the name is not the whole ARN.",
+    "",
+    "ARN SHAPE CONFIRMED against a real resource in this account rather than",
+    "assumed -- `aws wafv2 list-rule-groups --scope CLOUDFRONT --region us-east-1`",
+    "returns:",
+    "  arn:aws:wafv2:us-east-1:283556840805:global/rulegroup/PCMSanctionsRuleGroupCloudFront/75faf7da-d3d7-489c-a0d5-3d61bd78db03",
+    "so the id the wildcard below stands in for is real, and the region and the",
+    "global/ segment are the live values, not a guess.",
+    "",
+    "UiWafRuleGroupLookup is Resource \"*\" for ListRuleGroups because the call",
+    "carries no resource to scope against, and scoped to the PCM rule group for",
+    "GetRuleGroup. That group is Firewall-Manager-seeded and read-only to us --",
+    "no create/update/delete on it, by design.",
+    "",
+    "Every action is create/read/update/delete/tag on resources this stack",
+    "declares, plus two read-only lookups. Nothing here grants write access to",
+    "another stack's web ACL or to the sanctions group itself."
+  ],
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "UiWaf",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:CreateWebACL",
+        "wafv2:GetWebACL",
+        "wafv2:UpdateWebACL",
+        "wafv2:DeleteWebACL",
+        "wafv2:CreateIPSet",
+        "wafv2:GetIPSet",
+        "wafv2:UpdateIPSet",
+        "wafv2:DeleteIPSet",
+        "wafv2:TagResource",
+        "wafv2:UntagResource",
+        "wafv2:ListTagsForResource",
+        "wafv2:PutLoggingConfiguration",
+        "wafv2:GetLoggingConfiguration",
+        "wafv2:DeleteLoggingConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:wafv2:us-east-1:283556840805:global/webacl/uif-echo-dev-ui/*",
+        "arn:aws:wafv2:us-east-1:283556840805:global/ipset/uif-echo-dev-ui-allowed-ips/*"
+      ]
+    },
+    {
+      "Sid": "UiWafRuleGroupLookup",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:ListRuleGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UiWafSanctionsRuleGroupRead",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:GetRuleGroup"
+      ],
+      "Resource": "arn:aws:wafv2:us-east-1:283556840805:global/rulegroup/PCMSanctionsRuleGroupCloudFront/*"
+    }
+  ]
+}

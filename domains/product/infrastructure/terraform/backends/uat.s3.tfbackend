@@ -1,0 +1,40 @@
+# State for product's DOMAIN root in uat.
+#
+# The previous banner said "uat is not provisioned yet" and left the bucket
+# unfilled. uat is provisioned -- in the SAME account as dev (283556840805) --
+# so the banner was the stale part, not the account.
+#
+# WHY NOT THE SHARED LEGACY BUCKET, WHICH IS WHERE THIS ROOT'S DEV STATE LIVES.
+# backends/dev.s3.tfbackend uses
+# pearson-ingestion-framework-tfstate-283556840805 under echo-gold/dev/. Both
+# echo roots deliberately broke with that for uat, keeping each root's state
+# inside the stack's own data bucket so "a bucket policy or a lifecycle rule can
+# never reach across" (terraform-gold/backends/uat-uif.s3.tfbackend). uat
+# follows the newer pattern; dev is left where it is, because moving live state
+# is its own operation with its own risk.
+#
+# The key is a sibling of the two stack roots already in this bucket --
+# tfstate/infra-terraform.tfstate and tfstate/gold-terraform.tfstate -- and says
+# which root it describes. Verified before choosing it: NO state exists at the
+# key this file previously named (echo-gold/uat/terraform.tfstate) in either
+# candidate bucket, so nothing is orphaned by naming it for its neighbours
+# instead.
+#
+# THIS ROOT HAS NEVER BEEN APPLIED TO UAT. Only the two stack roots have state
+# here. So the first apply against this backend is a CREATE of everything this
+# root declares -- product's marketing-copy service and its event delivery,
+# about 25 resources -- not a no-op. That is consistent with the ADR-0018
+# ownership split (pipeline/common/framework = stack, schema/mapping/event
+# delivery = domain), so it does not collide with the stack roots; the two IAM
+# roles absent from uat today, marketing-copy-api-role and
+# marketing-copy-sync-role, are this root's output.
+#
+# Read the plan before approving it, and expect the uat deploy role's grants to
+# need the same widening dev needed under UIFPE-184: dev's failures on
+# CreateEventBus / CreateQueue / CreateRole were grants scoped to one env's
+# name, and uif-echo-uat-deploy-role has not been exercised on these resources.
+bucket       = "uif-echo-uat-data"
+key          = "tfstate/product-domain-terraform.tfstate"
+region       = "eu-west-1"
+use_lockfile = true
+encrypt      = true

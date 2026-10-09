@@ -1,0 +1,191 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": [
+        "s3:PutObject",
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:GetBucketVersioning",
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::pearson-ingestion-framework-tfstate-283556840805/*",
+        "arn:aws:s3:::pearson-ingestion-framework-tfstate-283556840805"
+      ]
+    },
+    {
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Effect": "Allow",
+      "Resource": "arn:aws:dynamodb:eu-west-1:283556840805:table/ingestion-framework-tfstate-locks"
+    },
+    {
+      "Action": [
+        "s3:PutObject",
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::echo-dev-glue-scripts/*",
+        "arn:aws:s3:::echo-dev-glue-scripts"
+      ]
+    },
+    {
+      "Action": [
+        "s3:PutObject",
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:GetBucketLocation",
+        "s3:DeleteObject"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:s3:::283556840805-s3-echo-dev-ui/*",
+        "arn:aws:s3:::283556840805-s3-echo-dev-ui",
+        "arn:aws:s3:::uif-echo-dev-ui/*",
+        "arn:aws:s3:::uif-echo-dev-ui"
+      ]
+    },
+    {
+      "Action": "cloudfront:CreateInvalidation",
+      "Effect": "Allow",
+      "Resource": "arn:aws:cloudfront::283556840805:distribution/*"
+    },
+    {
+      "Action": [
+        "cloudwatch:PutDashboard",
+        "cloudwatch:GetDashboard",
+        "cloudwatch:DeleteDashboards",
+        "cloudwatch:ListDashboards"
+      ],
+      "Effect": "Allow",
+      "Resource": "arn:aws:cloudwatch::283556840805:dashboard/*"
+    },
+    {
+      "Action": [
+        "iam:UntagRole",
+        "iam:TagRole",
+        "iam:PutRolePolicy",
+        "iam:PassRole",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:GetRolePolicy",
+        "iam:GetRole",
+        "iam:DetachRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole",
+        "iam:CreateRole",
+        "iam:AttachRolePolicy",
+        "iam:GetRole"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:iam::283556840805:role/echo-dev-*",
+        "arn:aws:iam::283556840805:role/uif-echo-dev-*",
+        "arn:aws:iam::283556840805:role/aws-service-role/lakeformation.amazonaws.com/AWSServiceRoleForLakeFormationDataAccess"
+      ]
+    },
+    {
+      "Action": "lambda:*",
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:lambda:eu-west-1:283556840805:function:*dev*",
+        "arn:aws:lambda:eu-west-1:283556840805:layer:echo-dev-*",
+        "arn:aws:lambda:eu-west-1:283556840805:layer:uif-echo-dev-*"
+      ]
+    },
+    {
+      "Action": "glue:*",
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": "dynamodb:*",
+      "Effect": "Allow",
+      "Resource": "arn:aws:dynamodb:eu-west-1:283556840805:table/*dev*"
+    },
+    {
+      "Action": "apigateway:*",
+      "Effect": "Allow",
+      "Resource": "arn:aws:apigateway:eu-west-1::/*"
+    },
+    {
+      "Action": "events:*",
+      "Effect": "Allow",
+      "Resource": "arn:aws:events:eu-west-1:283556840805:rule/*dev*"
+    },
+    {
+      "Action": [
+        "logs:*",
+        "logs:CreateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:UpdateLogDelivery"
+      ],
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
+        "s3:PutBucketPolicy",
+        "s3:GetBucketPolicy",
+        "s3:DeleteBucketPolicy"
+      ],
+      "Effect": "Allow",
+      "Resource": "arn:aws:s3:::uif-echo-dev-*"
+    },
+    {
+      "Action": [
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:Describe*",
+        "ec2:DeleteSecurityGroup",
+        "ec2:CreateSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress"
+      ],
+      "Effect": "Allow",
+      "Resource": "*"
+    },
+    {
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:oracle-*",
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:echo/*",
+        "arn:aws:secretsmanager:eu-west-1:283556840805:secret:uif/echo/*"
+      ]
+    },
+    {
+      "Sid": "LakeFormation",
+      "Effect": "Allow",
+      "Action": [
+        "lakeformation:RegisterResource",
+        "lakeformation:DeregisterResource",
+        "lakeformation:DescribeResource",
+        "lakeformation:GrantPermissions",
+        "lakeformation:RevokePermissions",
+        "lakeformation:ListPermissions",
+        "lakeformation:BatchGrantPermissions",
+        "lakeformation:BatchRevokePermissions",
+        "lakeformation:GetDataLakeSettings",
+        "lakeformation:PutDataLakeSettings"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Action": "sts:GetCallerIdentity",
+      "Effect": "Allow",
+      "Resource": "*"
+    }
+  ]
+}

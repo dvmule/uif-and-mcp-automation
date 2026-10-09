@@ -1,0 +1,54 @@
+# Service-level objectives for the gold layer (UIFPE-543), in the shape
+# capabilities/observability/guidelines.md prescribes. The metrics are the
+# CloudWatch EMF documents gold_telemetry.py emits (namespace UIF/Gold); the
+# alerts are the CloudWatch alarms in terraform-gold/alerts.tf, which mail the
+# alert-subscribers table through the Pearson Notifications API. Nothing reads
+# this file yet: it states the targets the alarms were tuned to, so a change
+# to either is reviewed against the other.
+service: echo-gold
+metrics:
+  - name: UIF/Gold RunCount
+    type: counter
+    dimensions: [Env, GoldId, Status]
+  - name: UIF/Gold DurationSeconds
+    type: gauge
+    unit: s
+    dimensions: [Env, GoldId, Status]
+  - name: UIF/Gold MinutesSinceLastSuccess
+    type: gauge
+    unit: min
+    dimensions: [Env, GoldId]
+  - name: UIF/Gold FreshnessBreached
+    type: gauge
+    dimensions: [Env, GoldId]
+    note: 1 when MinutesSinceLastSuccess > 1.5 x the entity's cadence
+slos:
+  - name: gold-run-success
+    sli: "1 - (RunCount{Status=FAILED} / RunCount)"
+    target: "99%"
+    window: 30d
+  - name: gold-freshness
+    sli: "share of five-minute sweeps with FreshnessBreached = 0 for every enabled entity"
+    target: "99.5%"
+    window: 30d
+  - name: gold-run-duration
+    sli: "DurationSeconds p95 per entity"
+    target: "<= 5400s"
+    window: 7d
+alerts:
+  - name: uif-echo-{env}-gold-run-failed
+    slo: gold-run-success
+    condition: "RunCount{Status=FAILED} sum over 5 min > 0"
+    route: email, alert-subscribers table
+  - name: uif-echo-{env}-gold-freshness-breached
+    slo: gold-freshness
+    condition: "FreshnessBreached max > 0 for 3 consecutive 5-min periods; missing data breaches"
+    route: email, alert-subscribers table
+  - name: uif-echo-{env}-gold-run-too-long
+    slo: gold-run-duration
+    condition: "DurationSeconds max over 1 h > 5400"
+    route: email, alert-subscribers table
+  - name: uif-echo-{env}-gold-dispatch-errors
+    slo: gold-freshness
+    condition: "AWS/Lambda Errors on the dispatcher sum over 5 min > 0"
+    route: email, alert-subscribers table

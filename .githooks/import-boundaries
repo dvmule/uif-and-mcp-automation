@@ -1,0 +1,21 @@
+# Import boundaries — history brought in from another repository.
+#
+# The Smart Commit convention (.githooks/lint-commits.sh) requires every
+# non-merge commit to carry a UIFPE key and a #comment. History imported from
+# another repository cannot satisfy that: those commits were authored before
+# this convention existed, under another repository's rules, and rewriting them
+# to add keys would destroy the history the import was performed to preserve.
+#
+# Each line below records the tip of one imported history. That commit and all
+# of its ancestors are exempt from the convention. Everything authored in this
+# repository is still linted — recording a boundary narrows the exemption to
+# foreign history and nothing else.
+#
+# Format:  <full-or-short-sha>  <what was imported, and the PR that did it>
+#
+# Adding a line is a deliberate act. It must name the source repository and the
+# pull request, so the exemption is auditable years later. If a SHA here is not
+# present in the repository the linter warns and ignores it, so a stale line
+# degrades to a no-op rather than silently widening the exemption.
+
+bed4e0d  uif-relay-echo subtree import into stacks/echo — PR #206, UIFPE-355, ADR-0015

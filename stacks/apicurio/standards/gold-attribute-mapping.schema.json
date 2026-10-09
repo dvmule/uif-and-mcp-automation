@@ -1,0 +1,557 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gold-attribute-mapping.schema.json",
+  "title": "Gold Attribute Mapping",
+  "description": "Defines Silver→Gold attribute mappings for one domain's gold table in the medallion architecture. One file per domain (e.g. product, order). Replaces the *-gold-attribute-mapping-template.xlsx workbook: each 'column' entry is a config-only change that engineering turns into master schema + lineage + mapping SQL.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domain", "table", "columns"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path to this schema file, for editor validation."
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Domain this mapping file covers, e.g. 'product'. One mapping file per domain."
+    },
+    "table": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Fully qualified gold table this mapping targets, e.g. 'gold_product.product'."
+    },
+    "drivingTable": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The Silver source table that IS the entity's spine: the gold table gets one row per (filtered) row of this table. Sources equal to it need no join; every other source attaches to it via sourceRef.join (directly or through a chain). Named here once so tooling never has to infer the entity's driving table."
+    },
+    "drivingSilverTable": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]*\\{env\\}[a-z0-9_]*\\.[a-z0-9_]+$",
+      "description": "The driving table's fully qualified Silver name with the environment templated (e.g. uif_echo_{env}_silver_tep.xxpso_inv_stock_atp_stg). Required by the new-entity scaffolder (UIFPE-260): the compiler must not guess which Silver database a table lives in, and it runs where no catalog is reachable. The wizard fills it from the silver catalog the author picked the table from."
+    },
+    "silverTables": {
+      "type": "object",
+      "description": "Bare source-table name -> fully qualified Silver name with the environment templated (e.g. QP_LIST_HEADERS_B: uif_echo_{env}_silver_tep.qp_list_headers_b). Required by the new-entity scaffolder for every LOOKUP table a column or nested field reads (UIFPE-262) — same rationale as drivingSilverTable: the compiler must not guess databases and runs where no catalog is reachable. The wizard fills it from the silver catalog.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-z0-9_]*\\{env\\}[a-z0-9_]*\\.[a-z0-9_]+$"
+      }
+    },
+    "drivingFilter": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Row filter over the driving table — a SQL boolean predicate defining which source rows belong to the entity (e.g. PPID IS NOT NULL). The scaffolder writes it into BOTH the generated SQL's WHERE and the manifest's sot_filter, keeping the platform invariant (SQL domain == reconcile's source-of-truth domain) true by construction. Only the new-entity scaffolder consumes it; the add-column compiler refuses intakes that carry it, because retrofitting a domain filter into shipped SQL is a hand-reviewed change."
+    },
+    "rowGroups": {
+      "type": "object",
+      "description": "Named row groups for Proliferate fan-out — user-maintained rule sets, defined ONCE per mapping and referenced by branch scopes (scope.group). Every column fanning out by the same business grouping uses literally the same predicate; renaming or extending a group is a one-place change.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": { "$ref": "#/$defs/rowGroupDef" }
+      }
+    },
+    "entityKey": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The gold table's PRIMARY KEY, ordered: each entry maps a gold key column to the driving-table column it comes from (product: inventoryItemId ← INVENTORY_ITEM_ID, organizationId ← ORGANIZATION_ID). This is the grain every attribute attaches to — the wizard prefills joins from it, grain derives from it (a join carrying the full key keeps the entity grain; a subset fans out across the remaining key), and a new entity's scaffold reads it for the runtime key_mapping/primary_key_cols. Optional during migration; every new mapping declares it. BOUNDARY: every key column comes from the DRIVING table — lookups contribute attributes, never key columns (product's organizationId comes from the org-replicated items table, not the org dimension). A grain no single Silver table carries (a grain-defining JOIN spine) is deliberately not expressible here — that is an architecture decision touching the CDC key_mapping invariants (ADR-0003), to be designed when the first such entity arrives.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["goldColumn", "drivingColumn"],
+        "properties": {
+          "goldColumn": { "$ref": "#/$defs/goldColumnName" },
+          "drivingColumn": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "transforms": {
+      "type": "object",
+      "description": "Named transformation rules — user-maintained, defined ONCE per mapping and referenced by column transforms ({\"rule\": \"pearsonImageUrl\"}). Same single-source-of-truth pattern as rowGroups: every attribute using a rule compiles literally the same SQL; extending a rule is a one-place change.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": { "$ref": "#/$defs/transformDef" }
+      }
+    },
+    "batch": {
+      "$ref": "#/$defs/batch"
+    },
+    "registry": {
+      "$ref": "#/$defs/registry"
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/column" }
+    }
+  },
+  "$defs": {
+    "registry": {
+      "type": "object",
+      "description": "This mapping file's own Apicurio registry coordinate (../schema/guidelines.md §1, apicurio-governance.md) — declared in the artifact itself, not only known to whoever runs the registration command. Optional: a mapping file's registration can stay deferred (e.g. metadata.lifecycle: draft on the paired master.json) while still declaring the coordinate it will register under.",
+      "additionalProperties": false,
+      "required": ["group", "artifact"],
+      "properties": {
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Apicurio artifact group — the owning domain, matching the top-level 'domain' field."
+        },
+        "artifact": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Apicurio artifact id. Per ADR-0023 this is '{domain}.{entity}.{type}' with type 'mapping' for this artifact kind, e.g. 'product.marketing-copy.mapping'. The former '<entity>-gold-attribute-mapping' form is superseded."
+        },
+        "compatibility": {
+          "enum": ["BACKWARD", "BACKWARD_TRANSITIVE", "FORWARD", "FORWARD_TRANSITIVE", "FULL", "FULL_TRANSITIVE", "NONE"],
+          "description": "Compatibility rule Apicurio enforces on this artifact. The normative Pearson standard requires BACKWARD_TRANSITIVE on data schema artifacts (FULL_TRANSITIVE on the event envelope); the transitive modes were absent from this enum until ADR-0023, so a conformant value could not be declared at all. Defaults to BACKWARD if omitted, which is weaker than the standard requires — declare it explicitly."
+        },
+        "tier": {
+          "enum": ["T1", "T2", "T3"],
+          "description": "Criticality tier, required at registration by the normative standard's D21: T1 critical, T2 standard, T3 observational. Drives retention, DLQ alerting, parallel-run window and contract-test depth, so it is the data owner's call. It is registry metadata and changeable without a schema version bump."
+        },
+        "note": {
+          "type": ["string", "null"],
+          "description": "Optional free-text context, e.g. why registration itself is still deferred even though the coordinate is declared."
+        }
+      }
+    },
+    "batch": {
+      "type": "object",
+      "description": "Metadata about the submission that introduced/changed these columns.",
+      "additionalProperties": false,
+      "required": ["requestedBy", "targetDate", "backfillMode"],
+      "properties": {
+        "requestedBy": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name or email of the requester."
+        },
+        "targetDate": {
+          "type": "string",
+          "format": "date",
+          "description": "Target delivery date, YYYY-MM-DD."
+        },
+        "backfillMode": {
+          "enum": ["silent", "emit"],
+          "description": "Whether existing products' new values are pushed to consumers on backfill (emit) or just appear quietly (silent)."
+        },
+        "newChannel": {
+          "type": ["string", "null"],
+          "description": "Name of a brand-new consumer channel needed for these attributes (e.g. 'datafeed'), or null if none."
+        }
+      }
+    },
+    "dataType": {
+      "enum": ["string", "integer", "number", "float", "boolean", "date", "timestamp"],
+      "description": "number = exact decimal (money, quantities). float = approximate (measurements, rates)."
+    },
+    "channels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "message", "api"],
+      "properties": {
+        "event": { "type": "boolean", "description": "Lean push-notification feed." },
+        "message": { "type": "boolean", "description": "Mid-size messaging payload." },
+        "api": { "type": "boolean", "description": "Full pull payload." }
+      },
+      "description": "Which consumer feeds carry this attribute. All attributes are always stored in the gold table regardless of channels."
+    },
+    "goldColumnName": {
+      "type": "string",
+      "pattern": "^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)*$",
+      "description": "camelCase gold column / field name. May use one level of dot notation for namespaced columns (e.g. `fulfillmentOrgDetails.sellingRestrictionCode`)."
+    },
+    "joinGrain": {
+      "enum": ["Master", "Org Level", "Proliferate"],
+      "description": "DEPRECATED (UIFPE-104): attachment is now explicit — every non-driving source (EAV included) declares sourceRef.join with its ON key pairs, and proliferation is expressed solely by branch scope + rowGroups. Accepted for backward compatibility while old files migrate; new entries must not carry it."
+    },
+    "transformDef": {
+      "type": "object",
+      "description": "A structured transformation compiled DETERMINISTICALLY around the source expression {x} — never prose. steps = a pipeline (applied in order); cases = a guarded CASE WHEN evaluated in order with an else of keep|null. Both may be combined: cases run first, steps wrap the result. sqlExpr is the gated escape hatch for genuinely custom logic: a SQL fragment containing {x}, flagged for engineering review by CI.",
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["steps"] },
+        { "required": ["cases"] },
+        { "required": ["sqlExpr"] }
+      ],
+      "properties": {
+        "description": { "type": ["string", "null"] },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op"],
+            "properties": {
+              "op": { "enum": ["round", "cast", "trim", "upper", "lower", "coalesceTo"] },
+              "precision": { "type": "integer", "minimum": 0 },
+              "to": { "type": "string", "description": "cast target, e.g. DECIMAL(38,2)" },
+              "value": { "type": "string", "description": "coalesceTo literal" }
+            }
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["when", "then"],
+            "properties": {
+              "when": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["op"],
+                "properties": {
+                  "op": { "enum": ["startsWith", "like", "equals", "in", "isNull"] },
+                  "values": { "type": "array", "items": { "type": "string" } }
+                }
+              },
+              "then": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["op"],
+                "properties": {
+                  "op": { "enum": ["prepend", "append", "replaceText", "literal", "null", "keep"] },
+                  "text": { "type": "string" },
+                  "find": { "type": "string" },
+                  "replaceWith": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "else": { "enum": ["keep", "null"], "description": "cases fallthrough; default keep." },
+        "sqlExpr": {
+          "type": "string",
+          "description": "Escape hatch: SQL fragment with {x} as the source expression. CI flags every use for engineering review."
+        }
+      }
+    },
+    "transformRef": {
+      "description": "A column's transform: null = straight copy; {rule} references a named transforms entry; an inline transformDef defines one in place. Prose strings are DEPRECATED (UIFPE-105) — accepted while old files migrate; new entries must be structured.",
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rule"],
+          "properties": { "rule": { "type": "string", "minLength": 1 } }
+        },
+        { "$ref": "#/$defs/transformDef" }
+      ]
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["table", "column"],
+      "properties": {
+        "table": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Source Oracle/PDH table. Not restricted to a fixed list: attributes sourced from any other Oracle table are welcome and will register a Bronze→Silver pipeline for that table first."
+        },
+        "column": { "type": "string", "minLength": 1 },
+        "filter": {
+          "type": ["string", "null"],
+          "description": "WHERE fragment, if any (e.g. \"ATTR_GROUP_ID = 802\")."
+        },
+        "join": {
+          "type": ["object", "null"],
+          "description": "How this source table attaches to the entity — REQUIRED for every source that is not the driving table, EAV tables included (their entity-key join is stated explicitly, e.g. ON INVENTORY_ITEM_ID [+ ORGANIZATION_ID]). Structured — never prose — so the compiler renders the JOIN deterministically and the UI can display it. leftTable must be the driving table or another already-joined source (chains compose: A -> B -> C).",
+          "additionalProperties": false,
+          "required": ["on"],
+          "properties": {
+            "type": { "enum": ["left", "inner"], "description": "left keeps entity rows without a match; inner drops them. Default left." },
+            "on": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["leftTable", "leftColumn", "rightColumn"],
+                "properties": {
+                  "leftTable":  { "type": "string", "minLength": 1 },
+                  "leftColumn": { "type": "string", "minLength": 1 },
+                  "rightColumn": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "discriminatorRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["table", "column"],
+      "properties": {
+        "table": { "type": "string", "minLength": 1 },
+        "column": { "type": "string", "minLength": 1 }
+      },
+      "description": "The Table.Column whose value decides which branch applies."
+    },
+    "rowGroupDef": {
+      "type": "object",
+      "description": "A named row group: either a positive predicate over an entity-grain column, or the COMPLEMENT of another named group ('everything not in ukOrgs') — the complement follows its base definition automatically, so the pair can never drift apart.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["column", "op", "values"],
+          "properties": {
+            "table": {
+              "type": ["string", "null"],
+              "description": "Entity-grain table the column lives on (e.g. the org dimension MTL_PARAMETERS); null if it is a gold column."
+            },
+            "column": { "type": "string", "minLength": 1 },
+            "op": { "enum": ["equals", "in", "startsWith"] },
+            "values": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+            "description": {
+              "type": ["string", "null"],
+              "description": "What this group means to the business, incl. the current membership if helpful."
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["complementOf"],
+          "properties": {
+            "complementOf": {
+              "type": "string",
+              "description": "Name of a PREDICATE row group this group is the complement of — every row NOT in that group. Must not reference another complement."
+            },
+            "description": { "type": ["string", "null"] }
+          }
+        }
+      ]
+    },
+    "branchScope": {
+      "type": ["object", "null"],
+      "description": "Proliferate grain only: WHICH entity rows receive this branch's value. Either a REFERENCE to a named rowGroups entry ({\"group\": \"ukOrgs\"} — preferred, single source of truth) or an inline predicate. The complement branch uses op=else = every row no sibling branch's scope claimed. Two branches may share one discriminator condition and differ only in scope.",
+      "additionalProperties": false,
+      "anyOf": [
+        { "type": "null" },
+        { "required": ["group"] },
+        { "required": ["column", "op"] }
+      ],
+      "properties": {
+        "group": {
+          "type": "string",
+          "description": "Name of a rowGroups entry — the scope IS that group; inline fields are then omitted."
+        },
+        "table": {
+          "type": ["string", "null"],
+          "description": "Entity-grain table the scope column lives on (e.g. the org dimension MTL_PARAMETERS); null if it is a gold column."
+        },
+        "column": { "type": "string", "minLength": 1 },
+        "op": {
+          "enum": ["equals", "in", "startsWith", "else"],
+          "description": "startsWith renders LIKE 'value%'. else = every row no sibling branch's scope claimed."
+        },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Empty for op=else."
+        },
+        "label": {
+          "type": ["string", "null"],
+          "description": "Human name for an inline row group, e.g. 'non-UK orgs'."
+        }
+      }
+    },
+    "branch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["condition", "source", "fallback"],
+      "properties": {
+        "condition": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The discriminator value this branch applies for ('10002', optionally labeled '10002 (Digital)'), or 'ELSE'. Row-group qualifiers do NOT belong here — use scope."
+        },
+        "scope": { "$ref": "#/$defs/branchScope" },
+        "source": { "$ref": "#/$defs/sourceRef" },
+        "transform": { "$ref": "#/$defs/transformRef" },
+        "fallback": {
+          "enum": ["returnNull", "fallbackToElse"],
+          "description": "What to do when this branch's source value is empty: return NULL, or fall back to the ELSE branch's value."
+        },
+        "joinGrain": { "$ref": "#/$defs/joinGrain" },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "nestedField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "sortKey", "source"],
+      "properties": {
+        "name": { "$ref": "#/$defs/goldColumnName" },
+        "type": { "$ref": "#/$defs/dataType" },
+        "sortKey": {
+          "type": "boolean",
+          "description": "At least one field in the array must have sortKey: true; multi-key sorts compose in field order (UIFPE-262). Not enforceable in pure JSON Schema — validated separately."
+        },
+        "source": {
+          "description": "null = declared with no Silver source yet; the column is rendered NULL until a source registers.",
+          "anyOf": [ { "type": "null" }, { "$ref": "#/$defs/sourceRef" } ]
+        },
+        "transform": { "$ref": "#/$defs/transformRef" }
+      }
+    },
+    "scalarColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goldColumnName", "businessDescription", "kind", "dataType", "source", "channels", "nullable"],
+      "properties": {
+        "goldColumnName": { "$ref": "#/$defs/goldColumnName" },
+        "businessDescription": { "type": "string", "minLength": 1 },
+        "kind": { "const": "scalar" },
+        "dataType": { "$ref": "#/$defs/dataType" },
+        "source": { "$ref": "#/$defs/sourceRef" },
+        "transform": { "$ref": "#/$defs/transformRef" },
+        "channels": { "$ref": "#/$defs/channels" },
+        "nullable": { "type": "boolean" },
+        "joinGrain": { "$ref": "#/$defs/joinGrain" },
+        "derivation": { "$ref": "#/$defs/derivation" },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "conditionalColumn": {
+      "type": "object",
+      "description": "For attributes whose source depends on a discriminator (e.g. digital vs physical items read different ATTR_GROUPs).",
+      "additionalProperties": false,
+      "required": ["goldColumnName", "businessDescription", "kind", "dataType", "discriminator", "channels", "branches"],
+      "properties": {
+        "goldColumnName": { "$ref": "#/$defs/goldColumnName" },
+        "businessDescription": { "type": "string", "minLength": 1 },
+        "kind": { "const": "conditional" },
+        "dataType": { "$ref": "#/$defs/dataType" },
+        "discriminator": { "$ref": "#/$defs/discriminatorRef" },
+        "channels": { "$ref": "#/$defs/channels" },
+        "branches": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/branch" }
+        },
+        "transform": {
+          "$ref": "#/$defs/transformRef",
+          "description": "Column-level transform applied AFTER the branch pick — it wraps the value the winning branch produced (e.g. URL normalization applied to whichever catalog's cover image won). A branch's own transform applies before the pick, to that branch's expression only."
+        },
+        "derivation": { "$ref": "#/$defs/derivation" },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "nestedColumn": {
+      "type": "object",
+      "description": "For 1-to-many attributes (e.g. BOM components, contributors) — a product has many.",
+      "additionalProperties": false,
+      "required": ["goldColumnName", "businessDescription", "kind", "joinKey", "channels", "fields"],
+      "properties": {
+        "goldColumnName": { "$ref": "#/$defs/goldColumnName" },
+        "businessDescription": { "type": "string", "minLength": 1 },
+        "kind": { "const": "nested" },
+        "joinKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How rows attach to the product, e.g. 'BILL_SEQUENCE_ID -> item'."
+        },
+        "filter": {
+          "type": ["string", "null"],
+          "description": "WHERE fragment shared by all fields in this array, if any."
+        },
+        "channels": { "$ref": "#/$defs/channels" },
+        "joinGrain": { "$ref": "#/$defs/joinGrain" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "description": "One entry per field inside each array element. At least one must have sortKey: true — multi-key sorts are the norm (UIFPE-262), and a pick's partitionBy must be covered by the sort keys.",
+          "items": { "$ref": "#/$defs/nestedField" }
+        },
+        "pick": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["partitionBy", "orderBy"],
+          "description": "Declarative ranked pick (UIFPE-262, new-entity scaffolds only): before the array is assembled, keep ONE source row per partition — row_number() over partitionBy, ordered by the orderBy expressions, rn = 1. This is how 'the ACTIVE price if one exists, else the latest end-dated' is said without hand-writing SQL. NOTE: the whole final SELECT reads pick winners, so SCALAR aggregates also see only the kept rows. orderBy expressions may reference field names (resolved to their projections) and driving columns; aggregates and windows refuse. The scaffolder requires every partitionBy field to also be a sort key of the array, so element order stays total and the canonical hash stays stable (the A8 lesson).",
+          "properties": {
+            "partitionBy": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Field names (from this column's fields) that define one array entry — the pick keeps one source row per distinct combination, per entity."
+            },
+            "orderBy": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["expr"],
+                "properties": {
+                  "expr": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A Spark SQL ordering expression over the source columns (e.g. CASE WHEN END_DATE IS NULL OR END_DATE >= current_timestamp THEN 0 ELSE 1 END). Review-gated like sqlExpr transforms."
+                  },
+                  "direction": { "enum": ["asc", "desc"] }
+                }
+              }
+            }
+          }
+        },
+        "derivation": { "$ref": "#/$defs/derivation" },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "column": {
+      "oneOf": [
+        { "$ref": "#/$defs/scalarColumn" },
+        { "$ref": "#/$defs/conditionalColumn" },
+        { "$ref": "#/$defs/nestedColumn" }
+      ]
+    },
+    "derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sql", "keyedBy"],
+      "description": "ADR-0008 (Accepted 2026-08-26): the query is the contract. A column whose value takes several steps to work out carries the author's actual SELECT plus a small declared contract; the compiler wraps the query as a CTE under the column's name and LEFT-joins it on the declared entity columns — the wrap is the ONLY transformation, so the reviewed SQL is the running SQL and there is nothing to drift. NOT a fourth kind: an optional block on a column of any kind (kind = the value's shape; derivation = how the value is reached). Governance is the validation battery (derivation_chain.py, run at submit and in CI): one read-only Spark SELECT, registered source aliases only, stable results (no run-varying functions; collects state their ordering), contract columns present in the projection — plus the live one-row-per-entity test run the wizard offers, and PR review before deploy (ADR-0006).",
+      "properties": {
+        "sql": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The author's own query — ONE read-only SELECT, Spark SQL dialect, reading only this entity's REGISTERED runtime aliases (items_ext, items_all, related, ... — never raw Silver table names). Must return at most one row per entity; lists and structs are built INSIDE the query (array_sort(collect_list(...)), named_struct(...)) so the output row is always the final value."
+        },
+        "keyedBy": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Which output column(s) identify the entity each row belongs to — the join contract for the compiler's LEFT join back to the driving table. entityColumn is the DRIVING-TABLE column joined against (an entity key column, or a value column like SEGMENT1 for reverse-keyed shapes); _ID entity columns are CAST AS BIGINT at the join (the A3 rule).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["queryColumn", "entityColumn"],
+            "properties": {
+              "queryColumn": { "type": "string", "minLength": 1 },
+              "entityColumn": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "valueColumn": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Which output column carries the value. Defaults to the goldColumnName."
+        },
+        "reads": {
+          "type": "object",
+          "description": "Which registered aliases and columns the query reads — COMPUTED by the validator from the parsed query and re-checked in CI, never typed by hand. Self-healing lineage: a stale entry fails the gate.",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

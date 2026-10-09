@@ -1,0 +1,37 @@
+name: Commit Identity
+
+# Enforces the one rule Smart Commits silently depend on: a commit's author
+# email must match a licensed Jira user in pearson.atlassian.net exactly.
+# Jira matches the address literally and does not normalise plus-addressing,
+# so `first.last+alias@pearson.com` matches nothing — and an unmatched author
+# means Jira DISCARDS the smart-commit command without logging anything. No
+# comment, no transition, no error. The commit looks fine; the automation
+# never ran. See capabilities/delivery/jira-github-integration.md
+# ("Author matching — the silent failure mode").
+#
+# The rule is defined once in .githooks/lint-identity.sh and enforced three
+# times: the pre-commit hook refuses to make the commit, the pre-push hook
+# refuses the push, and this workflow fails the pull request. CI is the
+# backstop, not the first line — a hook only runs on a machine that has it
+# configured, and --no-verify bypasses it.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  author-email:
+    name: Author email matches a Jira user
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit author emails
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .githooks/lint-identity.sh --range "$BASE_SHA..$HEAD_SHA"

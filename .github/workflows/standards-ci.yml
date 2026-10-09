@@ -1,0 +1,62 @@
+name: Standards CI
+
+# The naming rules and the hook that enforces them must agree. They drifted
+# once already — three rule assertions became the opposite of the standard and
+# one hook check began denying compliant work — because nothing checked them.
+# This job is that check. It is mechanical, needs no API key, and blocks --
+# which is the whole difference from the advisory standards-review.yml that
+# used to sit beside it: that one needed an API key the org would not provide
+# and an action the enterprise policy refuses, never ran successfully once, and
+# was deleted on 2026-09-18.
+
+on:
+  pull_request:
+    paths:
+      - 'architecture-design/standards/**'
+      - 'architecture-design/decisions/**'
+      # Self-test: a change to this file must run the jobs it defines.
+      - '.github/workflows/standards-ci.yml'
+  push:
+    branches: [develop]
+    paths:
+      - 'architecture-design/standards/**'
+      - 'architecture-design/decisions/**'
+      - '.github/workflows/standards-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  naming-guard:
+    name: Naming rules and hook agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: python -m pip install --quiet pytest
+
+      - name: Rules and hook agree
+        run: python -m pytest architecture-design/standards/hooks/test_validate_naming.py -v
+
+  # The gate shipped with UIFPE-457 lived under decisions/, which nothing ran —
+  # a fifth ADR collision would have landed exactly as the first four did.
+  adr-numbers:
+    name: ADR numbers are unique
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: python -m pip install --quiet pytest
+
+      - name: No duplicate ADR numbers
+        run: python -m pytest architecture-design/decisions/test_adr_numbers_are_unique.py -v

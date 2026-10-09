@@ -1,0 +1,7 @@
+# Test/CI dependencies of the generic MCP Bridge tooling (stdlib + PyYAML +
+# jsonschema at runtime; pytest for tests/). Pins match domains/product/qe/
+# requirements-dev.txt so the domain gate and the tooling gate share one
+# resolved set in the reusable workflow's validate job.
+pytest==9.0.3
+pyyaml==6.0.3
+jsonschema==4.26.0

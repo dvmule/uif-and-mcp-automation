@@ -1,0 +1,424 @@
+name: Promote apicurio
+
+# Promotes a build tag's ARTIFACTS into one environment and records the result
+# as a release tag. It does not converge infrastructure --
+# deploy-apicurio-infra.yml does that.
+#
+# THE TWO-TAG MODEL. A build tag (apicurio/vX.Y.Z) says what code went in; its
+# evidence is the CI gate. A release tag (release/<env>/<date>.<n>) says what
+# was deployed where; its evidence is smoke. Building never implies deploying,
+# so the release tag is cut only on green smoke and never speculatively.
+#
+# WHY COPY RATHER THAN REBUILD. The image digest and bundle hash in the build
+# tag's manifest are the bytes that passed the gate. Rebuilding would produce
+# different bytes -- the UI bundle is reproducible but the Docker image is not
+# -- so promotion copies and then proves the digest did not change.
+#
+# REPO VARIABLES
+#   APICURIO_UAT_PROMOTE   unset|skip = do nothing (DEFAULT)
+#                          run        = promote this tag into uat
+#   APICURIO_PROD_PROMOTE  same vocabulary, for prod
+
+on:
+  push:
+    tags:
+      - "apicurio/v*"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [uat, prod]
+        default: uat
+      promote:
+        description: "Promote this tag's artifacts"
+        type: choice
+        options: [run, skip]
+        default: skip
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-1
+
+  # Pearson's five mandatory tag values. Needed here too, not only in
+  # deploy-apicurio-infra.yml: promote runs a full `terraform plan` before it
+  # asserts the plan is app-only, and a plan cannot be produced without them.
+  #
+  # They are deliberately NOT in envs/<env>.tfvars and deliberately have no
+  # defaults in variables.tf -- a default would let a wrong value ship
+  # silently, and a wrong t_cost_centre misbills another team every month.
+  #
+  # TF_VAR_ names are CASE-SENSITIVE against the terraform variable name.
+  # t_dcl is prefixed APICURIO_ because a data classification level is a
+  # property of the DATA A STACK HOLDS, not of the organisation.
+  TF_VAR_t_app_id: ${{ vars.T_APP_ID }}
+  TF_VAR_t_cost_centre: ${{ vars.T_COST_CENTRE }}
+  TF_VAR_t_dcl: ${{ vars.APICURIO_T_DCL }}
+  TF_VAR_t_owner_individual: ${{ vars.T_OWNER_INDIVIDUAL }}
+  TF_VAR_t_responsible_individuals: ${{ vars.T_RESPONSIBLE_INDIVIDUALS }}
+
+jobs:
+  resolve:
+    name: What this run will do
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.mode.outputs.environment }}
+      promote: ${{ steps.mode.outputs.promote }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_ENV: ${{ inputs.environment }}
+          IN_PROMOTE: ${{ inputs.promote }}
+          VAR_UAT: ${{ vars.APICURIO_UAT_PROMOTE }}
+          VAR_PROD: ${{ vars.APICURIO_PROD_PROMOTE }}
+        run: |
+          set -euo pipefail
+          resolver=stacks/apicurio/scripts/resolve-deploy-mode.sh
+
+          environment="$("$resolver" \
+            --event "$EVENT" --input "${IN_ENV:-}" --var "uat" \
+            --allowed "uat,prod" --default "uat")"
+
+          case "$environment" in
+            uat)  var_value="${VAR_UAT:-}" ;;
+            prod) var_value="${VAR_PROD:-}" ;;
+          esac
+
+          promote="$("$resolver" \
+            --event "$EVENT" --input "${IN_PROMOTE:-}" --var "$var_value" \
+            --allowed "skip,run" --default "skip")"
+
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "promote=$promote" >> "$GITHUB_OUTPUT"
+          echo "::notice::environment=$environment promote=$promote (tag ${GITHUB_REF_NAME})"
+
+  promote:
+    name: Promote ${{ github.ref_name }} into ${{ needs.resolve.outputs.environment }}
+    needs: resolve
+    if: needs.resolve.outputs.promote == 'run'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve.outputs.environment }}
+    permissions:
+      contents: write
+      id-token: write
+    # Shares the infra workflow's group name on purpose: a promote and an infra
+    # apply must never interleave on one state file.
+    concurrency:
+      group: apicurio-deploy-${{ needs.resolve.outputs.environment }}
+      cancel-in-progress: false
+    env:
+      ENV_NAME: ${{ needs.resolve.outputs.environment }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      # fetch-depth 0: read-manifest.sh reads the annotated tag message, and
+      # next-release-tag.sh reads existing release tags.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # actions/checkout fetches the RESOLVED COMMIT SHA into refs/tags/<name>,
+      # which produces a LIGHTWEIGHT tag locally and discards the annotation --
+      # and the annotation is the manifest. read-manifest.sh then correctly
+      # refuses with "is a LIGHTWEIGHT tag, which has no message".
+      #
+      # `fetch-tags: true` on the checkout above asks for +refs/tags/*, but it
+      # shares one fetch with the sha refspec and does not reliably win, so the
+      # tag object is re-fetched here explicitly and forcibly. Verified against
+      # a real run: without this, dispatching on apicurio/v0.2.0 failed at the
+      # first manifest read (run 35603264803).
+      - name: Re-fetch the annotated tag object
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          type="$(git cat-file -t "refs/tags/${TAG}")"
+          [ "$type" = "tag" ] \
+            || { echo "::error::refs/tags/${TAG} is a ${type}, not an annotated tag object, so it carries no manifest. The re-fetch did not recover the annotation."; exit 1; }
+          echo "::notice::${TAG} is an annotated tag object; its manifest is readable."
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # Same pin as deploy-apicurio-dev.yml and stacks-ci.yml. A saved
+          # plan is only valid for the version that wrote it, so this must
+          # not drift from the workflow that applies alongside it.
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      # Every input comes from the manifest, which refuses to yield any field
+      # at all if the build tag's gate did not pass. So a promotion of a tag
+      # that never passed CI stops here rather than at a later assertion --
+      # which is exactly why each field is assigned to a variable BEFORE it is
+      # written to GITHUB_OUTPUT. Under `set -e`, a failing command
+      # substitution used as an argument to `echo` does not abort the script:
+      # `echo` itself still succeeds, and its exit status is what `-e`
+      # observes, so the inner failure is swallowed. A bare assignment
+      # (`v="$(cmd)"`) propagates the failure correctly. Do not "simplify"
+      # this back into `echo "field=$("$reader" ...)"`.
+      - name: Read the release manifest
+        id: manifest
+        run: |
+          set -euo pipefail
+          reader=stacks/apicurio/scripts/read-manifest.sh
+
+          commit="$("$reader" "$TAG" git_commit)"
+          bff_repository="$("$reader" "$TAG" bff.repository)"
+          bff_digest="$("$reader" "$TAG" bff.digest)"
+          registry_digest="$("$reader" "$TAG" registry.digest)"
+          ui_sha256="$("$reader" "$TAG" ui.sha256)"
+          ui_archive="$("$reader" "$TAG" ui.archive)"
+
+          {
+            echo "commit=$commit"
+            echo "bff_repository=$bff_repository"
+            echo "bff_digest=$bff_digest"
+            echo "registry_digest=$registry_digest"
+            echo "ui_sha256=$ui_sha256"
+            echo "ui_archive=$ui_archive"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install crane
+        env:
+          CRANE_VERSION: v0.20.2
+        run: |
+          set -euo pipefail
+          # go-containerregistry is not an allow-listed Actions owner, so crane
+          # is fetched as a binary rather than via its setup action.
+          curl -fsSL -o /tmp/crane.tgz \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/crane.tgz -C /tmp crane
+          sudo mv /tmp/crane /usr/local/bin/crane
+          crane version
+
+      - name: Log in to both ECR registries
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | crane auth login --username AWS --password-stdin \
+              "${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+      # copy-image.sh is manifest-verbatim: it reads the manifest digest with
+      # `crane digest`, checks the expected digest BEFORE copying, and reads
+      # the destination digest back AFTER. `docker pull && tag && push` changes
+      # the digest of a multi-architecture index; crane does not.
+      - name: Copy the BFF image into this environment's registry
+        env:
+          SOURCE_REPO: ${{ steps.manifest.outputs.bff_repository }}
+          EXPECTED_DIGEST: ${{ steps.manifest.outputs.bff_digest }}
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          dest="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com/uif-apicurio-${ENV_NAME}-bff-ecr-repo"
+          # copy-image.sh takes POSITIONAL arguments:
+          #   copy-image.sh <source-ref> <dest-ref> [expected-digest]
+          stacks/apicurio/scripts/copy-image.sh \
+            "${SOURCE_REPO}@${EXPECTED_DIGEST}" \
+            "${dest}:${TAG##*/}" \
+            "$EXPECTED_DIGEST"
+
+      # The archive lives in the BUILD environment's release-artifacts bucket,
+      # because release-apicurio.yml's artifacts job runs with environment: dev.
+      # Copying it here gives this environment its own retrievable copy, and its
+      # own version_id -- which differs from the manifest's by construction.
+      # That is data, not drift.
+      - name: Copy the UI archive into this environment's artifact store
+        id: archive
+        env:
+          SOURCE_ARCHIVE: ${{ steps.manifest.outputs.ui_archive }}
+          UI_SHA256: ${{ steps.manifest.outputs.ui_sha256 }}
+        run: |
+          set -euo pipefail
+          dest="s3://uif-apicurio-${ENV_NAME}-release-artifacts/${UI_SHA256}.tar.gz"
+          aws s3 cp "$SOURCE_ARCHIVE" "$dest"
+          aws s3 cp "$dest" /tmp/bundle.tar.gz
+          echo "local=/tmp/bundle.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "::notice::archive copied to $dest"
+
+      # restore-bundle.sh removes the destination on ANY failure, refuses to
+      # extract over an existing directory, refuses a config.json inside the
+      # archive, and refuses absolute or parent-directory paths. It re-hashes
+      # the extracted tree and refuses unless it matches ui.sha256.
+      - name: Restore and verify the UI bundle
+        env:
+          LOCAL_ARCHIVE: ${{ steps.archive.outputs.local }}
+          UI_SHA256: ${{ steps.manifest.outputs.ui_sha256 }}
+        run: |
+          set -euo pipefail
+          # restore-bundle.sh takes POSITIONAL arguments:
+          #   restore-bundle.sh <archive.tar.gz> <dest-dir> <expected-sha256>
+          # It refuses to extract over an existing directory, so /tmp/dist must
+          # not exist yet.
+          stacks/apicurio/scripts/restore-bundle.sh \
+            "$LOCAL_ARCHIVE" /tmp/dist "$UI_SHA256"
+
+      - name: Init Terraform
+        working-directory: stacks/apicurio/infrastructure/terraform
+        run: |
+          set -euo pipefail
+          terraform init -reconfigure -input=false \
+            -backend-config="backends/${ENV_NAME}.hcl"
+
+      # Plan the FULL configuration, then prove it changes nothing but the BFF
+      # task definition and service. No -target: a full plan that contains only
+      # application changes already IS an app-only deploy, so proving the
+      # precondition is better than narrowing the apply. Platform drift becomes
+      # a stop that names itself, rather than a passenger inside an unrelated
+      # apply.
+      - name: Plan
+        working-directory: stacks/apicurio/infrastructure/terraform
+        env:
+          BFF_DIGEST: ${{ steps.manifest.outputs.bff_digest }}
+          REGISTRY_DIGEST: ${{ steps.manifest.outputs.registry_digest }}
+        run: |
+          set -euo pipefail
+          terraform plan -input=false \
+            -var-file="envs/${ENV_NAME}.tfvars" \
+            -var "bff_image_digest=${BFF_DIGEST}" \
+            -var "registry_image_digest=${REGISTRY_DIGEST}" \
+            -out=tf.plan
+
+      # `terraform show -json` is piped straight into the script and never
+      # written to a file, a log or an artifact: a plan carries generated
+      # values in clear, and only resource addresses may be printed.
+      #
+      # Exit 3 means the plan is empty -- this digest is already deployed, so
+      # there is nothing to apply and that is not a failure.
+      - name: Assert the plan touches only the application layer
+        id: blast
+        working-directory: stacks/apicurio/infrastructure/terraform
+        run: |
+          set -euo pipefail
+          set +e
+          terraform show -json tf.plan \
+            | ../../../../stacks/apicurio/scripts/assert-app-only-plan.sh \
+                aws_ecs_task_definition.bff aws_ecs_service.bff
+          status=$?
+          set -e
+          case "$status" in
+            0) echo "apply=true"  >> "$GITHUB_OUTPUT" ;;
+            3) echo "apply=false" >> "$GITHUB_OUTPUT"
+               echo "::notice::This digest is already deployed — nothing to apply." ;;
+            *) exit "$status" ;;
+          esac
+
+      - name: Apply the reviewed plan
+        if: steps.blast.outputs.apply == 'true'
+        working-directory: stacks/apicurio/infrastructure/terraform
+        run: terraform apply -input=false tf.plan
+
+      # This environment's own config.json, never the source environment's.
+      # The bundle is byte-identical across environments; the API URL is not,
+      # so it is written at publish time rather than baked into the build.
+      - name: Publish the UI bundle with this environment's config
+        working-directory: stacks/apicurio/infrastructure/terraform
+        run: |
+          set -euo pipefail
+          api="$(terraform output -raw bff_api_url 2>/dev/null || echo "")"
+          bucket="$(terraform output -raw ui_bucket 2>/dev/null || echo "")"
+          dist_id="$(terraform output -raw ui_distribution_id 2>/dev/null || echo "")"
+
+          # Presence is not shape: an empty output would sync a UI that calls
+          # its own origin for the API and fails in the browser, not here.
+          for pair in "api=$api" "bucket=$bucket" "dist=$dist_id"; do
+            [ -n "${pair#*=}" ] || { echo "::error::Terraform output ${pair%%=*} is empty — has this environment been applied?"; exit 1; }
+          done
+
+          printf '{\n  "apiUrl": "%s"\n}\n' "$api" > /tmp/dist/config.json
+
+          # --delete: the bundle is content-hashed, so stale hashed assets
+          # would accumulate forever otherwise.
+          aws s3 sync /tmp/dist "s3://${bucket}" --delete
+
+          # config.json is unhashed and its name never changes, so it is the
+          # one file that must be invalidated by name along with the entry
+          # points. Everything else is content-addressed.
+          aws cloudfront create-invalidation --distribution-id "$dist_id" \
+            --paths '/' '/index.html' '/config.json'
+
+      # QE tier 2. The integration suite cannot run on a pull request -- the
+      # ALBs are internal and a PR runner cannot reach them -- so this is the
+      # only place it executes against this environment.
+      # Read the endpoints tier 2 needs from state, once, rather than per step.
+      - name: Resolve the deployed endpoints
+        id: tf
+        working-directory: stacks/apicurio/infrastructure/terraform
+        run: |
+          set -euo pipefail
+          for o in bff_api_url ui_url authorizer_ci_header; do
+            v="$(terraform output -raw "$o" 2>/dev/null || echo "")"
+            [ -n "$v" ] || { echo "::error::Terraform output $o is empty — has ${ENV_NAME} been applied?"; exit 1; }
+            echo "$o=$v" >> "$GITHUB_OUTPUT"
+          done
+
+      # Same pin as deploy-apicurio-dev.yml, so tier 2 runs on the same
+      # interpreter here as it does in dev rather than whatever `python`
+      # happens to resolve to on ubuntu-latest that week.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `-e src/` rather than naming a module: the failure is a class, not one
+      # package. Tier 1 cannot catch it, because qe/ci.sh runs pytest with
+      # `--ignore=qe/tests/integration`, so these files are never imported
+      # there. That stayed invisible until tier 2 first ran on 2026-09-20.
+      - name: Install the integration suite's dependencies
+        working-directory: stacks/apicurio
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -e src/
+          python -m pip install --quiet 'pytest>=8.3' pytest-asyncio httpx
+
+      - name: Smoke (QE tier 2)
+        id: smoke
+        working-directory: stacks/apicurio
+        env:
+          RUN_INTEGRATION_TESTS: "1"
+          BFF_URL: ${{ steps.tf.outputs.bff_api_url }}
+          UI_ORIGIN: ${{ steps.tf.outputs.ui_url }}
+          APICURIO_CI_KEY: ${{ secrets.APICURIO_CI_KEY }}
+          APICURIO_CI_HEADER: ${{ steps.tf.outputs.authorizer_ci_header }}
+          # A runner is never IP-allowlisted, so the authorizer MUST deny an
+          # uncredentialled request from here.
+          EXPECT_AUTHORIZER_DENY: "1"
+        run: |
+          set -euo pipefail
+          if [ -z "${APICURIO_CI_KEY:-}" ]; then
+            echo "::error::APICURIO_CI_KEY is empty for environment ${ENV_NAME}. The authorizer compares it against uif/apicurio/${ENV_NAME}/auth/ci in Secrets Manager. Set an environment-scoped secret of that name on ${ENV_NAME} and put the same value in Secrets Manager. See stacks/apicurio/DEPLOY-UAT.md."
+            exit 1
+          fi
+          # `-m "not requires_seed"` is load-bearing: a freshly deployed
+          # registry is legitimately empty, and without it the seeded-data
+          # assertions fail against exactly the deploy this job verifies.
+          python -m pytest qe/tests/integration -v -m "not requires_seed"
+
+      # The release tag is cut ONLY here, after green smoke. It is the evidence
+      # that this version ran in this environment and passed; cutting it before
+      # smoke would make it a record of an intention.
+      - name: Cut the release tag
+        if: success()
+        run: |
+          set -euo pipefail
+          name="$(stacks/apicurio/scripts/next-release-tag.sh "$ENV_NAME")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$name" -m "$(printf '%s:\n  promoted_from: %s\n  environment: %s\n  bff_digest: %s\n  ui_sha256: %s\n  smoke: passed\n' \
+            "$name" "$TAG" "$ENV_NAME" \
+            "${{ steps.manifest.outputs.bff_digest }}" \
+            "${{ steps.manifest.outputs.ui_sha256 }}")"
+          git push origin "$name"
+          echo "::notice::cut $name"
+          echo "### Released" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$name\` from \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"

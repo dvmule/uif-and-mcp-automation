@@ -1,0 +1,336 @@
+name: Gold schemas (reusable)
+
+# The gold schema gates, once, for any domain. Callers supply only their own
+# trigger paths and their domain name (UIFPE-551, ADR-0022 decision 5).
+#
+# Why a reusable workflow and not one file per domain, nor one file for all:
+# a single workflow cannot carry every domain's trigger paths, and a per-domain
+# copy of the body is what produced a FALSE GREEN once already - the copy's
+# globs still pointed at the original domain, and a glob that matches nothing
+# exits 0. So every step here fails closed: zero masters, zero configs or a
+# missing manifest is an error, never a pass.
+
+on:
+  workflow_call:
+    inputs:
+      domain:
+        description: "Domain folder under domains/ - must yield at least one gold master"
+        required: true
+        type: string
+      publish:
+        description: "Register the projections. The caller owns this decision."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: masters, projections and pipeline config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install jsonschema pyyaml sqlparse
+
+      - name: Validate gold masters + mapping manifests
+        run: python3 stacks/echo/src/apps/cli/validate_gold_schemas.py --domain "${{ inputs.domain }}"
+
+      # Entity and version come from the path BY NAME. The previous version read
+      # them as awk field numbers, which only worked at one directory depth.
+      - name: Generate tier projections + assert the concentric invariant
+        env:
+          DOMAIN: ${{ inputs.domain }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/subsets
+          count=0
+          for master in domains/"$DOMAIN"/src/schemas/gold/*/v*/master.json; do
+            [ -f "$master" ] || continue
+            rel="${master#domains/$DOMAIN/src/schemas/gold/}"
+            entity="${rel%%/*}"
+            rest="${rel#*/}"
+            version="${rest%%/*}"
+            echo "[GENERATE] $entity/$version"
+            python3 stacks/echo/src/apps/cli/generate_tier_subsets.py \
+              --master "$master" --entity "$entity" --version "$version" \
+              --out-dir /tmp/subsets
+            count=$((count + 1))
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No gold master matched domains/$DOMAIN/src/schemas/gold/*/v*/master.json. Refusing to report success on zero files - that is how a mistyped domain or a moved path looks."
+            exit 1
+          fi
+          echo "::notice::Generated tier projections for $count master(s) in $DOMAIN."
+
+      # gold_config.validate is the same function sync_pipelines.py calls before
+      # any DynamoDB write, so a bad schedule or a drifted alias fails the pull
+      # request instead of the deploy.
+      - name: Validate the pipeline config the way sync_pipelines will
+        env:
+          DOMAIN: ${{ inputs.domain }}
+        run: |
+          python3 - <<'PY'
+          import os, sys, pathlib, yaml
+          sys.path.insert(0, "stacks/echo/src/apps/cli")
+          import gold_config
+
+          domain = os.environ["DOMAIN"]
+          base_dir = pathlib.Path(f"domains/{domain}/src/apps/pipelines/base")
+          overlay_dir = pathlib.Path(f"domains/{domain}/src/apps/pipelines/overlays")
+
+          bases = sorted(base_dir.glob("*.yaml"))
+          if not bases:
+              sys.exit(f"[FAIL] no pipeline config under {base_dir} - refusing to "
+                       "pass on zero files")
+
+          def resolve(o, env):
+              if isinstance(o, str):
+                  return o.replace("{env}", env)
+              if isinstance(o, dict):
+                  return {k: resolve(v, env) for k, v in o.items()}
+              if isinstance(o, list):
+                  return [resolve(v, env) for v in o]
+              return o
+
+          rc = 0
+          for base_path in bases:
+              entity = base_path.stem
+              base = yaml.safe_load(base_path.read_text(encoding="utf-8"))
+              overlays = sorted(overlay_dir.glob(f"*/{base_path.name}"))
+              if not overlays:
+                  print(f"[FAIL] {entity}: no overlay for {base_path.name}")
+                  rc = 1
+                  continue
+              manifest_path = pathlib.Path(
+                  f"domains/{domain}/src/schemas/mapping/{entity}/v1/manifest.yaml")
+              manifest = None
+              if manifest_path.exists():
+                  manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+
+              for overlay in overlays:
+                  env = overlay.parent.name
+                  cfg = gold_config.deep_merge(
+                      base, yaml.safe_load(overlay.read_text(encoding="utf-8")))
+                  cfg = gold_config.auto_init(resolve(cfg, env))
+
+                  err = gold_config.validate(cfg)
+                  if err:
+                      print(f"[FAIL] {entity}/{env}: {err}")
+                      rc = 1
+                      continue
+                  if manifest is None:
+                      print(f"[FAIL] {entity}/{env}: no manifest at {manifest_path}")
+                      rc = 1
+                      continue
+
+                  # Compared as SETS. The hazard this guards is a source in one
+                  # file and not the other: it either gets no key_mapping (the
+                  # transform refuses) or is never registered as a temp view (the
+                  # SQL dies at TABLE_OR_VIEW_NOT_FOUND). Order is not that
+                  # hazard - generic_gold_transform joins the two by alias, not
+                  # by position - so a differing order is reported, not failed.
+                  cfg_aliases = [s["alias"] for s in cfg["sources"]]
+                  man_aliases = [s["alias"] for s in manifest["sources"]]
+                  only_cfg = sorted(set(cfg_aliases) - set(man_aliases))
+                  only_man = sorted(set(man_aliases) - set(cfg_aliases))
+                  if only_cfg or only_man:
+                      print(f"[FAIL] {entity}/{env}: source aliases differ from the "
+                            f"manifest. In config only: {only_cfg}. In manifest "
+                            f"only: {only_man}.")
+                      rc = 1
+                      continue
+                  if cfg_aliases != man_aliases:
+                      print(f"::notice::{entity}/{env}: alias order differs from the "
+                            "manifest. Harmless, because the runtime joins them by "
+                            "alias, but worth aligning.")
+                  print(f"[OK]   {entity}/{env}: valid, aliases match the manifest")
+
+          sys.exit(rc)
+          PY
+
+      - name: Upload generated projections as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gold-tier-subsets-${{ inputs.domain }}
+          path: /tmp/subsets
+          retention-days: 30
+
+  # A skipped job logs nothing, so the cutover state would be invisible on main.
+  # Neutral with a notice, not red - this is a latch, not a failure (ADR-0004 CP-5).
+  publish-disabled:
+    name: Registry publish not enabled
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.publish
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Notice
+        run: echo "::notice::Registry publish skipped for ${{ inputs.domain }} - the caller did not enable it. Publishing is a prod-release action, so it needs a push to main and that domain's deploy latch open."
+
+  publish:
+    name: Publish to the schema registry
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: dev
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install (jq + curl are already on the runner)
+        run: pip install pyyaml
+
+      # Downloaded, not regenerated. The generation loop lives in ONE place, and
+      # what gets registered is provably what the validate job checked.
+      - name: Download the projections the validate job generated
+        uses: actions/download-artifact@v4
+        with:
+          name: gold-tier-subsets-${{ inputs.domain }}
+          path: /tmp/subsets
+
+      # group=default -> consumer-audience tier projections
+      # group=engineering -> engineering-audience artifacts (canonical, mapping)
+      #
+      # PUBLISH_API_BASE is a VARIABLE, not a secret - it is the registry BFF's
+      # base URL. publish.sh has no default (it used to fall back to a sandbox
+      # URL and publish against the wrong registry), so it must be set at
+      # Settings -> Environments -> dev -> Variables, and the job fails without it.
+      - name: Publish tier projections + canonical + mapping
+        env:
+          DOMAIN: ${{ inputs.domain }}
+          PUBLISH_API_BASE: ${{ vars.PUBLISH_API_BASE }}
+        run: |
+          set -euo pipefail
+          chmod +x stacks/echo/src/apps/cli/publish.sh
+          # Two counters, not one: `found` guards a glob that matched nothing,
+          # `published` guards claiming a publish that registered nothing. A
+          # domain whose every entity is still a draft is a NOTICE, not a
+          # failure - that is the gate working, not a broken run.
+          found=0
+          published=0
+          for master in domains/"$DOMAIN"/src/schemas/gold/*/v*/master.json; do
+            [ -f "$master" ] || continue
+            found=$((found + 1))
+            rel="${master#domains/$DOMAIN/src/schemas/gold/}"
+            entity="${rel%%/*}"
+            rest="${rel#*/}"
+            version="${rest%%/*}"
+            service_urn=$(jq -r '.metadata.owner.service' "$master")
+            classification=$(jq -r '.metadata.dataClassification' "$master")
+
+            # ADR-0022 decision 3: metadata.lifecycle is the publish gate, and
+            # it is a property OF THE ENTITY, declared in the file the reviewer
+            # is already reading. A draft is validated and projected, never
+            # registered; moving it off draft is what publishes it.
+            #
+            # This step used to pass the literal string `active` on every call,
+            # so a draft entity would have been registered as active - the gate was
+            # stated in the master and read by nobody. The registry's own
+            # request model accepts only active|deprecated, so a draft cannot
+            # be registered AS a draft either; skipping is the only correct
+            # handling. validate_gold_schemas.py requires the field, so an
+            # absent value cannot reach here.
+            # active and deprecated are both REGISTERABLE - the registry's model
+            # accepts either, and a deprecated contract still needs its schema
+            # kept current (ADR-0013: DEPRECATED closes new enrollment, it does
+            # not stop delivery). Only a draft, or a value the registry would
+            # reject, is withheld.
+            lifecycle=$(jq -r '.metadata.lifecycle // empty' "$master")
+            case "$lifecycle" in
+              active|deprecated) ;;
+              *)
+                echo "::notice::Skipping $entity - metadata.lifecycle is '${lifecycle:-<absent>}'. Only 'active' or 'deprecated' can be registered; moving it off draft is what publishes it."
+                continue
+                ;;
+            esac
+
+            # Read the tiers the generator DECLARED it emitted, rather than
+            # assuming all three (UIFPE-553). An entity serving one audience
+            # produces one projection, and a contract for a channel it does not
+            # serve would carry no data.
+            #
+            # Deliberately NOT `[ -f "$schema" ] || continue`: probing cannot
+            # tell a tier that was skipped on purpose from one missing because
+            # generation failed, so that shortcut would turn this fix into a new
+            # false green. The declaration is checked BOTH ways instead - no
+            # declaration is an error, and a declared tier whose file is absent
+            # is an error.
+            tiers_file="/tmp/subsets/$entity/$version/tiers.json"
+            if [ ! -f "$tiers_file" ]; then
+              echo "::error::No tiers.json at $tiers_file. The generator declares which tiers it emitted; without that declaration there is no way to tell a deliberately skipped tier from a failed generation."
+              exit 1
+            fi
+            for tier in $(jq -r '.emitted[]' "$tiers_file"); do
+              schema="/tmp/subsets/$entity/$tier/$version/schema.json"
+              if [ ! -f "$schema" ]; then
+                echo "::error::tiers.json declares '$tier' emitted for $entity, but $schema does not exist. Generation did not produce what it claimed."
+                exit 1
+              fi
+              echo "[PUBLISH consumer] $entity.gold-$tier-value from $schema"
+              bash stacks/echo/src/apps/cli/publish.sh \
+                --schema "$schema" \
+                --service-urn "$service_urn" \
+                --artifact-id "$entity.gold-$tier-value" \
+                --classification "$classification" \
+                --lifecycle "$lifecycle"
+            done
+            for tier in $(jq -r '.skipped[]' "$tiers_file"); do
+              echo "[SKIP $tier] $entity serves no $tier contract - no attribute is tagged for that channel"
+            done
+
+            echo "[PUBLISH engineering] $entity.gold-canonical-value from $master"
+            bash stacks/echo/src/apps/cli/publish.sh \
+              --schema "$master" \
+              --service-urn "$service_urn" \
+              --artifact-id "$entity.gold-canonical-value" \
+              --group engineering \
+              --classification "$classification" \
+              --lifecycle "$lifecycle"
+
+            manifest="domains/$DOMAIN/src/schemas/mapping/$entity/$version/manifest.yaml"
+            if [ -f "$manifest" ]; then
+              mapping_json="/tmp/subsets/$entity/$version/mapping.json"
+              python3 stacks/echo/src/apps/cli/build_mapping_artifact.py \
+                --manifest "$manifest" --entity "$entity" --version "$version" \
+                --out "$mapping_json"
+              echo "[PUBLISH engineering] $entity.gold-mapping-manifest from $mapping_json"
+              bash stacks/echo/src/apps/cli/publish.sh \
+                --schema "$mapping_json" \
+                --service-urn "$service_urn" \
+                --artifact-id "$entity.gold-mapping-manifest" \
+                --group engineering \
+                --classification "$classification" \
+                --lifecycle "$lifecycle" \
+                --type-override JSON
+            else
+              echo "::error::No mapping manifest at $manifest"
+              exit 1
+            fi
+            published=$((published + 1))
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::No master matched domains/$DOMAIN/src/schemas/gold/*/v*/master.json. Refusing to report a successful publish that found nothing to publish."
+            exit 1
+          fi
+          if [ "$published" -eq 0 ]; then
+            echo "::notice::$DOMAIN: $found master(s) found, none registerable - see the per-entity notices above."
+          else
+            echo "::notice::$DOMAIN: registered $published of $found master(s); the rest were withheld by their lifecycle."
+          fi
+
+      # No S3 sync here on purpose: per-env artifact uploads belong to the
+      # deploy workflows, which sync from the branch being deployed.

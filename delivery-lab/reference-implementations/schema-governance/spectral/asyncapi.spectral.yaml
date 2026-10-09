@@ -1,0 +1,70 @@
+# Spectral ruleset for async (AsyncAPI 3.0 + Avro/JSON Schema) contracts.
+# Naming/envelope rules this enforces come from ../../../../capabilities/event/guidelines.md;
+# the registry-coordinate rule comes from ../../../../stacks/apicurio/standards/guidelines.md §1.
+extends: [[spectral:asyncapi, "off"]]
+
+rules:
+  uif-registry-coordinate-required:
+    description: Every registered contract must declare its Apicurio group:artifact coordinate.
+    message: "{{error}} — add an x-registry block with group, artifact, compatibility."
+    severity: error
+    given: "$"
+    then:
+      field: x-registry
+      function: truthy
+
+  uif-event-type-format:
+    description: Event type is reverse-DNS-prefixed, dot-delimited, versioned (capabilities/event/guidelines.md §1).
+    message: "channels[*].address '{{value}}' must match com.pearson.<domain>.<entity>.<action>.v<major>"
+    severity: error
+    given: "$.channels[*].address"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^com\\.pearson\\.[a-z]+\\.[a-zA-Z]+\\.[a-zA-Z]+\\.v[0-9]+$"
+
+  uif-one-topic-per-event-type:
+    description: A channel must carry exactly one message type unless the ordering exception is documented (capabilities/event/guidelines.md §1).
+    message: "Channel '{{property}}' declares more than one message — document the ordering exception with x-ordering-exception, or split into separate channels."
+    severity: warn
+    given: "$.channels[*]"
+    then:
+      field: x-ordering-exception
+      function: falsy
+
+  uif-partition-key-declared:
+    description: The partition/shard key must be chosen deliberately, not left implicit (capabilities/event/guidelines.md §1).
+    message: "Channel is missing x-partitionKey."
+    severity: error
+    given: "$.channels[*]"
+    then:
+      field: x-partitionKey
+      function: truthy
+
+  uif-envelope-is-referenced-not-inlined:
+    description: The CloudEvents envelope is the shared, centrally-registered artifact — never redefined per message (stacks/apicurio/standards/apicurio-governance.md §3).
+    message: "message.payload should $ref the shared pearson-event-envelope artifact, not redefine specversion/id/source/type/time inline."
+    severity: error
+    given: "$.components.messages[*].payload.allOf[0]"
+    then:
+      field: $ref
+      function: truthy
+
+  uif-delivery-semantics-stated:
+    description: Every operation states delivery semantics so consumers know whether to dedupe (capabilities/event/guidelines.md §2).
+    message: Operation description should state at-least-once or exactly-once delivery.
+    severity: warn
+    given: "$.operations[*].description"
+    then:
+      function: pattern
+      functionOptions:
+        match: "(?:[Aa]t-least-once|[Ee]xactly-once)"
+
+  uif-example-required:
+    description: At least one realistic example message is required (capabilities/event/guidelines.md §2).
+    message: message is missing an examples array.
+    severity: warn
+    given: "$.components.messages[*]"
+    then:
+      field: examples
+      function: truthy

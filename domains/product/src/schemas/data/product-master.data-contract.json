@@ -1,0 +1,25 @@
+{
+  "id": "product.master",
+  "version": "1.0.0",
+  "status": "active",
+  "owner": "product-domain-team",
+  "description": "Governed master record for a product, sourced from the ProductCreated event's Silver->Gold mapping.",
+  "schema": { "$ref": "../events/product-created-data.json" },
+  "classification": "internal",
+  "sla": {
+    "freshness": "PT1H",
+    "availability": "99.9%"
+  },
+  "qualityRules": [
+    { "dimension": "completeness", "rule": "productId is never null", "threshold": "100%" },
+    { "dimension": "uniqueness", "rule": "productId is unique", "threshold": "100%" }
+  ],
+  "lineage": {
+    "sourceEvents": ["com.pearson.product.product.created.v1"],
+    "sourceMapping": "../mapping/product/v1/product.mapping.json"
+  },
+  "registry": {
+    "group": "product",
+    "artifact": "product-master-data-contract"
+  }
+}

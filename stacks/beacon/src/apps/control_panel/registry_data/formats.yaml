@@ -1,0 +1,42 @@
+# Format registry seed data. options_schema is a JSON Schema fragment — the
+# UI renders each format's option form from it (D10: schema-driven panel, so
+# registering a format needs no panel release). The ids must match the
+# beacon renderer registry (beacon/renderers.py REGISTRY).
+
+- id: csv
+  kind: data
+  options_schema:
+    type: object
+    properties:
+      delimiter:
+        type: string
+        default: comma
+        enum: [comma, tab, pipe]
+        description: Field separator in the delivered file (UIFPE-171)
+      header: {type: boolean, default: true}
+      quote_all: {type: boolean, default: true}
+      encoding: {type: string, default: UTF-8, enum: [UTF-8, UTF-16, ISO-8859-1]}
+      formula_escape:
+        type: boolean
+        default: true
+        description: Escape =, +, -, @ cell prefixes (Excel formula injection)
+    additionalProperties: false
+
+- id: json
+  kind: data
+  options_schema:
+    type: object
+    properties:
+      style: {type: string, default: jsonlines, enum: [jsonlines]}
+    additionalProperties: false
+
+- id: xml
+  kind: data
+  options_schema:
+    type: object
+    properties:
+      root_tag: {type: string, default: rows}
+      row_tag: {type: string, default: row}
+      declaration: {type: boolean, default: true}
+      encoding: {type: string, default: UTF-8}
+    additionalProperties: false

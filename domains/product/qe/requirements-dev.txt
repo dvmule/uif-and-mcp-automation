@@ -1,0 +1,21 @@
+# Provisional home pending the domain packaging decision; consumed as `pip install -r domains/product/qe/requirements-dev.txt`.
+# Pinned to current-stable versions verified importable against Python
+# 3.11/3.12 in this repo's environment (2026-08). `requests` removed —
+# grepped domains/product for `import requests` and found no uses.
+pytest==9.0.3
+boto3==1.43.50
+pyyaml==6.0.3
+jsonschema==4.26.0
+sqlparse==0.5.5
+# qe/tests/ (FastAPI starter contract/unit tests) — fastapi pulls pydantic;
+# httpx is what fastapi.testclient.TestClient actually drives. Neither was
+# declared by either branch that merged the two qe/ trees together, so the
+# combined suite failed collection on CI (2026-08-08).
+fastapi==0.132.0
+httpx==0.28.1
+# test_beacon_product_export.py (merged 2026-08-18, PR #53) imports the beacon
+# engine (stacks/beacon/src/libs/dynamic_mapping, migrated from
+# domains/beacon/ per ADR-0010) consumed-by-reference via conftest — the
+# engine imports sqlglot. Pin kept IDENTICAL to the engine's runtime pin in
+# stacks/beacon/src/requirements.txt; move them together.
+sqlglot==30.15.0

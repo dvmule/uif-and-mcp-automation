@@ -1,0 +1,65 @@
+[
+  {
+    "productId": "PP-101",
+    "isbn13": "9780134685991",
+    "priceSpecifications": [
+      {
+        "priceListName": "STANDARD_GBP",
+        "listPriceAmount": 49.99,
+        "netPriceAmount": 42.49,
+        "vatPriceAmount": 50.99,
+        "vatCountryCode": "GB",
+        "currencyCode": "GBP",
+        "priceStartTimestamp": "2026-01-01T00:00:00Z",
+        "priceEndTimestamp": null
+      },
+      {
+        "priceListName": "STANDARD_USD",
+        "listPriceAmount": 64.99,
+        "netPriceAmount": 55.24,
+        "vatPriceAmount": 64.99,
+        "vatCountryCode": "US",
+        "currencyCode": "USD",
+        "priceStartTimestamp": "2026-01-01T00:00:00Z",
+        "priceEndTimestamp": "2026-12-31T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "productId": "PP-102",
+    "isbn13": "9781492056355",
+    "priceSpecifications": [
+      {
+        "priceListName": "STANDARD_GBP",
+        "listPriceAmount": 39.99,
+        "netPriceAmount": 33.99,
+        "vatPriceAmount": 40.79,
+        "vatCountryCode": "GB",
+        "currencyCode": "GBP",
+        "priceStartTimestamp": "2026-03-01T00:00:00Z",
+        "priceEndTimestamp": null
+      }
+    ]
+  },
+  {
+    "productId": "PP-105",
+    "isbn13": null,
+    "priceSpecifications": []
+  },
+  {
+    "productId": "PP-999",
+    "isbn13": null,
+    "priceSpecifications": [
+      {
+        "priceListName": "STANDARD_GBP",
+        "listPriceAmount": 9.99,
+        "netPriceAmount": 8.49,
+        "vatPriceAmount": 10.19,
+        "vatCountryCode": "GB",
+        "currencyCode": "GBP",
+        "priceStartTimestamp": "2026-01-01T00:00:00Z",
+        "priceEndTimestamp": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,115 @@
+# Gold pipeline: marketing_copy — environment-agnostic base definition
+# (UIFPE-252, the marketing-copy content library).
+# Per-env values (S3 paths, enablement) live in
+# pipelines/overlays/{env}/marketing_copy.yaml. Synced to DynamoDB by
+# scripts/sync_pipelines.py (config-as-code, ADR-0004).
+#
+# Runtime-owned fields (watermarks, channel registry, publish cursors) are
+# NEVER defined here — the transform owns them and sync preserves them.
+
+gold_id: marketing_copy
+domain: product
+
+schema:
+  version: v1
+
+# ── Sources ─────────────────────────────────────────────────────────────────
+# The alias MUST match src/schemas/mapping/marketing_copy/v1/manifest.yaml
+# EXACTLY — see program's base yaml for the asymmetric failure modes when the
+# two files drift. Single-source entity: the one staging table is the driving
+# table AND the source of truth; key_mapping itself is manifest-side only.
+sources:
+  - alias: market_copy
+    silver_table: uif_echo_{env}_silver_mdm.xxpso_ego_market_copy_data
+    watermark_col: _silver_updated_at
+    is_source_of_truth: true
+
+target:
+  # Second TABLE in the product domain's existing gold database — not a new
+  # database, so the Lake Formation gold-layer tag (UIFPE-229) already covers
+  # it and no grant work exists for this entity at all.
+  database: uif_echo_{env}_gold_product
+  table: marketing_copy
+  primary_key_cols:
+    - contentId
+
+# ── Schedule (per-pipeline since UIFPE-149) ─────────────────────────────────
+schedule:
+  # Daily. The library's consumers read it through the content service, whose
+  # freshness contract is "moves at pipeline cadence" — a faster rung buys
+  # nothing until a consumer asks for it (one config line to change).
+  frequency: gold-24h
+  # 07:45 threads the existing daily ladder: product 06:30 (~25-40 min),
+  # program 07:15 (~15 min). This entity reads a
+  # DIFFERENT Silver table than both, so the spacing is about Glue capacity,
+  # not source contention. PROVISIONAL until the first runs are measured.
+  # Quote it: YAML 1.1 parses an unquoted 7:45 as the integer 465.
+  start_time: "07:45"
+  failure_cooldown_minutes: 30
+
+# ── Reconcile ───────────────────────────────────────────────────────────────
+# OFF for the first load, same as product and program shipped. What stays
+# unprotected while off: a copy leaving the domain (re-versioned off 'C',
+# disabled, or hard-deleted upstream) is only ever DELETED by reconcile's SoT
+# anti-join (the manifest's sot_filter) — the transform only upserts. Expect
+# stale rows for anything that leaves until this is enabled; turn it on once
+# the first load's counts are trusted. NOTE for the content service
+# (UIFPE-254): until reconcile is on, a deleted copy keeps serving its last
+# content rather than 404ing — acceptable for launch, stated honestly.
+reconcile:
+  enabled: false
+  dry_run: true
+  max_deletes_per_run: 5000
+
+# Serve this entity from the SHARED gold serving table (UIFPE-518): one table
+# and one Lambda for every entity, so these two lines are the whole opt-in.
+#
+# compress_prop names the ONE property stored compressed, under
+# <prop>Gz, and decompressed again on read (UIFPE-767). This entity is why
+# that capability exists: the content is a document rather than a field, so
+# storing it raw would put a large item in a table of small ones and the
+# claim-check pattern it sits behind would buy nothing. Every other served
+# entity is scalars and declares nothing here.
+#
+# Addressed by contentId, which is both the merge key and the business key, so
+# this entity needs no secondary index. Needs a one-off baseline after deploy:
+# the sync is change-log driven and a first fill has no change rows to read.
+serving:
+  enabled: true
+  compress_prop: marketingCopyContentText
+
+channels:
+  bootstrap_mode: silent
+backfill_mode: silent
+
+# Snapshot pre-gate: skip StartJobRun entirely when the source's Iceberg
+# metadata_location matches the last successful run's — a daily cadence costs
+# nothing on a day Silver did not commit.
+snapshot_gate: true
+
+glue:
+  # ── CDC profile ────────────────────────────────────────────────────────────
+  # Leaner than product/program ON PURPOSE: this entity reads ONE 6.5M-row
+  # table with no joins, no EAV pivots and no arrays — the whole job is a
+  # filter + window dedupe + projection. The content strings are heavy
+  # (avg 1,665 chars, max 348K), which is why this is not minimum-sized.
+  # PROVISIONAL: no run has been measured yet; adjust on evidence.
+  worker_type: G.1X
+  num_workers: 4
+  timeout_minutes: 120
+  # Shared runtime knob, read on every run regardless of profile.
+  max_affected_fraction: 0.5
+
+  # ── Full-load profile ─────────────────────────────────────────────────────
+  # Dispatcher-selected when the target table is absent (the first load) and
+  # for manual --rebuild runs. False-heavy costs money; false-lean is an
+  # outage loop (see program's note) — sized up for the initial 6.5M-row CTAS
+  # over wide content strings.
+  full_load:
+    worker_type: G.2X
+    num_workers: 8
+    timeout_minutes: 180
+
+metadata:
+  owner: reyasahamed.habibrahman@pearson.com
+  domain: product

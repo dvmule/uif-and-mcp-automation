@@ -1,0 +1,102 @@
+domain: product
+version: v1
+
+# ── Semantic layer ──────────────────────────────────────────────────────────
+# The marketing-copy content library (UIFPE-252): one row per contentId,
+# read from the PDH staging table at version 'C' (the current row). Design:
+# domains/product/docs/design-marketing-copy-content-service.md. Compiled from
+# the authored intake at ./product.mapping.json (same folder) — that file is
+# the source of truth for the RULES; this one is what the runtime consumes.
+
+source_system:
+  name: "Oracle EBS PDH"
+  modules: ["Marketing Copy staging (XXPSO custom)"]
+  contact: "ebs-platform@pearson.com"
+
+# What a library row is: the CURRENT (version = 'C') copy for a contentId,
+# excluding disabled rows and rows with no contentId. The source carries 4
+# full-key duplicate rows (live count 2026-09-03) — the SQL dedupes with a
+# deterministic latest-by-LAST_UPDATE_DATE pick, RECORD_ID as the tie-break,
+# so the grain is EXACTLY one row per contentId. geo-visibility is NOT a
+# property of this source — it is a product-side assignment attribute (EAV
+# group 1181) and deliberately absent here. The attachment column is
+# deliberately excluded (owner decision 2026-09-03).
+
+canonical_lineage:
+  contentId:
+    pdh_table:  XXPSO_EGO_MARKET_COPY_DATA
+    pdh_column: CONTENT_ID
+    role:       pk
+
+  marketingCopyTypeCode:
+    pdh_table:  XXPSO_EGO_MARKET_COPY_DATA
+    pdh_column: TYPE
+
+  owningMarketCode:
+    pdh_table:  XXPSO_EGO_MARKET_COPY_DATA
+    pdh_column: OWNING_MARKET
+
+  audienceCode:
+    pdh_table:  XXPSO_EGO_MARKET_COPY_DATA
+    pdh_column: TARGET_AUDIENCE
+
+  marketingCopyText:
+    pdh_table:  XXPSO_EGO_MARKET_COPY_DATA
+    pdh_column: COPY_DESC
+
+  marketingCopyContentText:
+    pdh_table:  XXPSO_EGO_MARKET_COPY_DATA
+    pdh_column: CONTENT
+    # 27,701 rows carry NULL content at version 'C' (live, 2026-09-03). They
+    # are KEPT — the metadata is valid — and the retrieval API answers 404
+    # for them ("nothing published yet").
+
+# ── Physical layer ──────────────────────────────────────────────────────────
+# Single-source entity: every column reads the one staging table, so there is
+# exactly one alias, it is the driving table, and it is the source of truth.
+# The alias here MUST also appear in the pipeline config
+# (src/apps/pipelines/base/marketing_copy.yaml) — see program's manifest for
+# the asymmetric failure modes when the two drift.
+
+schema:
+  master: ../../../gold/marketing_copy/v1/master.json
+
+sql:
+  file: sql/marketing_copy.sql
+
+sources:
+  - alias: market_copy
+    silver_table: uif_echo_{env}_silver_mdm.xxpso_ego_market_copy_data
+    watermark_col: _silver_updated_at
+    is_source_of_truth: true        # used by reconcile for orphan detection
+    sot_pk_mapping:                 # gold PK col -> Spark SQL expression
+      contentId: "CONTENT_ID"
+    # Domain filter — MUST match the WHERE in sql/marketing_copy.sql.
+    # Reconcile appends this to its SoT PK projection, and it is what DELETES
+    # a row that leaves the domain (a copy re-versioned off 'C', disabled, or
+    # removed): the transform only upserts, so without this filter the
+    # anti-join would still find the row in the unfiltered SoT and the stale
+    # Gold row would never be removed.
+    sot_filter: "VERSION = 'C' AND (DISABLED_FLAG IS NULL OR DISABLED_FLAG <> 'Y') AND CONTENT_ID IS NOT NULL"
+    key_mapping:                    # ADR-0003 D1: changed row -> affected Gold key
+      contentId: "CONTENT_ID"
+
+target:
+  database: uif_echo_{env}_gold_product
+  table: marketing_copy
+  primary_key_cols:
+    - contentId
+
+# No ARRAY-typed properties and no complex/date columns: array_sort_keys and
+# column_types are deliberately absent (both are read with empty defaults).
+
+# Physical column order. MUST match master.json property order and the mapping
+# SQL SELECT order (pinned by qe/test_gold_mapping_intake_parity.py); the
+# framework metadata columns are appended by the runtime after these.
+output_columns:
+  - contentId
+  - marketingCopyTypeCode
+  - owningMarketCode
+  - audienceCode
+  - marketingCopyText
+  - marketingCopyContentText

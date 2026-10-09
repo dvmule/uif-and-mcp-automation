@@ -1,0 +1,27 @@
+service: product-api
+metrics:
+  - name: product.api.request.duration
+    type: histogram
+    unit: ms
+  - name: product.api.request.count
+    type: counter
+  - name: product.api.request.errors
+    type: counter
+slos:
+  - name: product-api-availability
+    sli: "1 - (product.api.request.errors / product.api.request.count)"
+    target: "99.9%"
+    window: 30d
+  - name: product-api-latency-p99
+    sli: "histogram_quantile(0.99, product.api.request.duration)"
+    target: "<= 300ms"
+    window: 7d
+alerts:
+  - name: product-api-availability-burn-rate
+    slo: product-api-availability
+    burnRateThreshold: "2x over 1h"
+    route: "#product-oncall"
+  - name: product-api-latency-p99-burn-rate
+    slo: product-api-latency-p99
+    burnRateThreshold: "2x over 1h"
+    route: "#product-oncall"

@@ -1,0 +1,5 @@
+# Test-only dependencies for qe/ci.sh (stacks-ci installs every
+# requirements*.txt the stack declares; runtime deps live in
+# ../src/requirements.txt).
+jsonschema>=4.0
+pyyaml>=6.0

@@ -1,0 +1,14 @@
+# Dependabot configuration. Ecosystems must name a real package manager -
+# an empty string fails config validation on every PR.
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+  - package-ecosystem: "pip"
+    directory: "/stacks/event/src"
+    schedule:
+      interval: "daily"

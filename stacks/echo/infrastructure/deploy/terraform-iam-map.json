@@ -1,0 +1,943 @@
+{
+  "_comment": [
+    "Terraform resource type -> the IAM actions a deploy role needs to manage it,",
+    "and how tightly those actions can be scoped. bootstrap-environment.sh renders",
+    "an environment's deploy policy from this, so adding a resource type to the",
+    "Terraform means adding it here in the same change.",
+    "",
+    "PORTED FROM stacks/apicurio/infrastructure/deploy/terraform-iam-map.json,",
+    "which established the format and the scope vocabulary. The CONTENT is Echo's",
+    "own: the two stacks overlap on API Gateway, CloudFront, WAFv2, Lambda, IAM,",
+    "logs and security groups, but Echo adds Glue, Lake Formation, DynamoDB, S3",
+    "objects and VPC endpoints, and has no ECS, ECR, load balancer or RDS. Do not",
+    "assume an entry is right because apicurio has one with the same name.",
+    "",
+    "THIS IS A FIRST DRAFT AND WILL BE WRONG IN PLACES. apicurio's equivalent took",
+    "FIVE apply-and-fix rounds to converge (UIFPE-496), and the reason generalises:",
+    "a derivation sees the resources a stack manages, and is blind to the",
+    "post-create reads, tag reads and list-shaped calls the AWS provider makes",
+    "around them. A green `--verify-only` is therefore not evidence the apply will",
+    "work. Budget the rounds; each failure names the missing action.",
+    "",
+    "Actions come from the AWS provider's behaviour, not only from the obvious",
+    "create/delete pair: almost every resource is read back immediately after",
+    "creation, and most have a separate tag read that fails independently.",
+    "",
+    "49 resource types and 9 data sources, matching BOTH roots -- the top-level",
+    "one and infrastructure/terraform-gold. It covered only the first until",
+    "UIFPE-576 folded gold into the same release unit, and a policy derived from",
+    "one root grants nothing for the other root's resources.",
+    "",
+    "The count is no longer only a manual invariant:",
+    "qe/pipeline/test_terraform_iam_map.py asserts both directions against both",
+    "roots, and loads required-actions.py to check the script reads the same",
+    "roots this map is checked against."
+  ],
+  "_scopes": {
+    "_comment": "Scope token -> ARN template. {env}, {account}, {region} are substituted. A token whose value is [\"*\"] is unscopable and says why. NOTE: {env} is the NAME PREFIX segment, which for this stack is `uif-echo-dev` or `uif-echo-uat` -- not the bare environment, because the legacy stacks are echo-{env} and prod is eds-prod. bootstrap-environment.sh resolves it from the tfvars' name_prefix_override rather than from the env argument.",
+    "s3_stack_buckets": {
+      "arns": [
+        "arn:aws:s3:::{prefix}-*",
+        "arn:aws:s3:::{prefix}-*/*"
+      ],
+      "why": "Every bucket this stack owns is {prefix}-something: data, bronze, silver, gold, ui, release-artifacts. Both forms are needed -- bucket-level actions take the bucket ARN, object-level actions take /*, and a policy with only one of them fails halfway through an apply. This is the grant that already let the dev role reach uif-echo-dev-release-artifacts without a change, confirmed by simulate-principal-policy on 2026-09-23."
+    },
+    "s3_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "s3:ListAllMyBuckets is account-shaped and takes no resource. The provider calls it to resolve a bucket's region on refresh."
+    },
+    "glue": {
+      "arns": [
+        "arn:aws:glue:{region}:{account}:catalog",
+        "arn:aws:glue:{region}:{account}:job/{prefix}-*",
+        "arn:aws:glue:{region}:{account}:connection/{prefix}-*",
+        "arn:aws:glue:{region}:{account}:database/{db_prefix}_*",
+        "arn:aws:glue:{region}:{account}:table/{db_prefix}_*/*",
+        "arn:aws:glue:{region}:{account}:trigger/{prefix}-*"
+      ],
+      "why": "Jobs and connections are hyphen-named from name_prefix; catalog databases and tables are UNDERSCORE-named from glue_db_prefix, because a Glue database name cannot contain a hyphen. Two prefixes, and a policy written with only the hyphen form silently fails every catalog call. The bare `catalog` ARN is required alongside the database ARN -- Glue evaluates database operations against both."
+    },
+    "glue_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "glue:GetJobs, GetConnections, GetDatabases and GetTags are list-shaped and take no resource. The provider uses them on refresh."
+    },
+    "dynamodb": {
+      "arns": [
+        "arn:aws:dynamodb:{region}:{account}:table/{legacy_prefix}-*",
+        "arn:aws:dynamodb:{region}:{account}:table/{legacy_prefix}-*/index/*",
+        "arn:aws:dynamodb:{region}:{account}:table/{prefix}-*",
+        "arn:aws:dynamodb:{region}:{account}:table/{prefix}-*/index/*"
+      ],
+      "why": "Scoped on LEGACY_PREFIX, not name_prefix, and that is not a typo. DynamoDB tables hold data, so locals.tf holds them on legacy_name_prefix during a phased rename. On a from-scratch uif stack the two are equal (dev-uif and uat-uif deliberately set no legacy override, so it falls through), but on the legacy stacks they differ -- and a policy scoped to the wrong one grants nothing. The /index/* form is needed because UpdateTable on a GSI evaluates against the index ARN."
+    },
+    "lakeformation_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "GrantPermissions, RevokePermissions and ListPermissions carry the resource in the REQUEST BODY, not as an ARN, so IAM has nothing to condition on -- an inherent property of the Lake Formation API, not a gap here. This is the widest grant in the policy and worth knowing: it lets the holder grant Lake Formation permissions on any catalog resource in the account. Narrowing it needs Lake Formation's own data-lake-admin model, not IAM. \n\nNOT AN INVENTION -- it matches what dev already runs on. Checked against the live echo-dev-github-actions role on 2026-09-24: its LakeFormation statement is also Resource \"*\". So this scope reproduces the existing precedent rather than widening anything. \n\nDEV HOLDS FOUR ACTIONS THIS DELIBERATELY OMITS, and the two groups differ: BatchGrantPermissions and BatchRevokePermissions may or may not be used by the provider for the 19 aws_lakeformation_permissions resources -- unknown, so they are left out and the apply-and-fix loop is what will say, which is the whole point of deriving rather than copying. GetDataLakeSettings and PutDataLakeSettings are a firmer no: this root declares no aws_lakeformation_data_lake_settings, so nothing here calls them, and PutDataLakeSettings sets WHO THE DATA LAKE ADMINS ARE -- a deploy role holding it can make itself a Lake Formation admin. uat should not inherit that from dev by being copied."
+    },
+    "lambda": {
+      "arns": [
+        "arn:aws:lambda:{region}:{account}:function:{prefix}-*",
+        "arn:aws:lambda:{region}:{account}:layer:{prefix}-*",
+        "arn:aws:lambda:{region}:{account}:layer:{prefix}-*:*"
+      ],
+      "why": "Name-scopable. The layer needs both the unversioned and the versioned form: PublishLayerVersion evaluates against the layer, GetLayerVersion against layer:version."
+    },
+    "events": {
+      "arns": [
+        "arn:aws:events:{region}:{account}:rule/{prefix}-*"
+      ],
+      "why": "Name-scopable. 28 schedule rules plus the two event-pattern rules."
+    },
+    "logs": {
+      "arns": [
+        "arn:aws:logs:{region}:{account}:log-group:*{prefix}-*",
+        "arn:aws:logs:{region}:{account}:log-group:*{prefix}-*:*",
+        "arn:aws:logs:{region}:{account}:log-group:/aws/lambda/{prefix}-*",
+        "arn:aws:logs:{region}:{account}:log-group:/aws/lambda/{prefix}-*:*",
+        "arn:aws:logs:{region}:{account}:log-group:/aws/apigateway/{prefix}",
+        "arn:aws:logs:{region}:{account}:log-group:/aws/apigateway/{prefix}:*",
+        "arn:aws:logs:us-east-1:{account}:log-group:aws-waf-logs-{prefix}-*",
+        "arn:aws:logs:us-east-1:{account}:log-group:aws-waf-logs-{prefix}-*:*"
+      ],
+      "why": "Three name shapes, and all three are load-bearing. A Lambda's group is platform-prefixed /aws/lambda/; the WAF's group must begin aws-waf-logs- because WAF refuses any other prefix, and it lives in US-EAST-1 because a CLOUDFRONT-scope web ACL's logging configuration must. The leading wildcard covers both. The :* form is required for PutRetentionPolicy, which evaluates against the group's stream-level ARN."
+    },
+    "logs_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "logs:DescribeLogGroups is list-shaped and takes no resource."
+    },
+    "apigateway": {
+      "arns": [
+        "arn:aws:apigateway:{region}::/apis",
+        "arn:aws:apigateway:{region}::/apis/*",
+        "arn:aws:apigateway:{region}::/tags/*"
+      ],
+      "why": "API Gateway ARNs are path-shaped and carry no account segment. /apis is needed for the create -- the id does not exist until it returns -- and /apis/* for everything under it: 31 routes, 2 integrations, the stage and the authorizer."
+    },
+    "cloudfront": {
+      "arns": [
+        "*"
+      ],
+      "why": "CreateDistributionWithTags and CreateOriginAccessControl take no resource ARN, and a distribution's ARN is not predictable before creation. Same conclusion apicurio reached. The distribution is the UI's only public surface, so this is the grant to revisit first if the policy is ever narrowed."
+    },
+    "wafv2": {
+      "arns": [
+        "arn:aws:wafv2:us-east-1:{account}:global/webacl/{prefix}-ui/*",
+        "arn:aws:wafv2:us-east-1:{account}:global/ipset/{prefix}-ui-allowed-ips/*"
+      ],
+      "why": "CLOUDFRONT-scope WAFv2 ARNs are global/ under us-east-1 regardless of where the origin lives. Shape confirmed against a real resource in this account rather than assumed -- list-rule-groups returns arn:aws:wafv2:us-east-1:283556840805:global/rulegroup/PCMSanctionsRuleGroupCloudFront/<id>. Drafted in full at uif-echo-dev-waf-grant.json, which also records that the dev role held NONE of these on 2026-09-22."
+    },
+    "wafv2_rulegroup_read": {
+      "arns": [
+        "arn:aws:wafv2:us-east-1:{account}:global/rulegroup/PCMSanctionsRuleGroupCloudFront/*"
+      ],
+      "why": "Read-only on the Firewall-Manager-seeded sanctions rule group, which this stack looks up by name and never creates or updates. Separate from the wafv2 scope so the policy cannot be read as granting write on PCM's group."
+    },
+    "cloudwatch": {
+      "arns": [
+        "arn:aws:cloudwatch::{account}:dashboard/{prefix}-*",
+        "arn:aws:cloudwatch:{region}:{account}:alarm:{prefix}-*"
+      ],
+      "why": "Dashboards carry no region segment in their ARN; alarms do. Two shapes for two resource types that look like one service."
+    },
+    "cloudwatch_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "cloudwatch:ListDashboards and DescribeAlarms are list-shaped and take no resource."
+    },
+    "iam_stack_roles": {
+      "arns": [
+        "arn:aws:iam::{account}:role/{prefix}-*"
+      ],
+      "why": "The roles this stack owns -- glue, lambda and the github-actions role in iam.tf. Scoped by name, so this grants nothing over the DEPLOY role itself unless that role is also named {prefix}-*. It is not: dev uses the shared echo-dev-github-actions, and uat gets uif-echo-uat-deploy-role. Worth keeping that way; a deploy role able to rewrite its own trust policy is a privilege-escalation path."
+    },
+    "ec2_sg": {
+      "arns": [
+        "arn:aws:ec2:{region}:{account}:security-group/*",
+        "arn:aws:ec2:{region}:{account}:security-group-rule/*",
+        "arn:aws:ec2:{region}:{account}:vpc-endpoint/*",
+        "arn:aws:ec2:{region}:{account}:vpc/*",
+        "arn:aws:ec2:{region}:{account}:subnet/*"
+      ],
+      "why": "Security groups, their rules and VPC endpoints are not name-scopable at create time -- the id does not exist until the call returns, and ec2 has no name condition. Scoped to the account and region, which is as tight as this API allows. apicurio narrowed the equivalent with a Project tag condition on ModifySecurityGroupRules; that is worth copying here once the tags land, and is the reason locals.tf keeps the Project key."
+    },
+    "ec2_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "CreateSecurityGroup, CreateVpcEndpoint and every ec2:Describe* take no resource condition a create-time caller can satisfy. CreateTags is included because the provider tags a security group in the same call that creates it."
+    },
+    "secretsmanager": {
+      "arns": [
+        "arn:aws:secretsmanager:{region}:{account}:secret:uif/echo/{env}/*"
+      ],
+      "why": "The slash-delimited form identity-secrets.md mandates. Read-only here: this root only READS the UI login secret through a data source, and never creates one. Note the path is uif/echo/{env}/ regardless of name_prefix -- the secret namespace was never renamed, and dev-uif.tfvars points at uif/echo/dev/ui/login."
+    },
+    "sts_self": {
+      "arns": [
+        "*"
+      ],
+      "why": "sts:GetCallerIdentity is unconditionally self-scoped and takes no resource."
+    },
+    "_skip": {
+      "arns": [],
+      "why": "Managed outside this root, or not an AWS resource. No actions are emitted."
+    },
+    "_in_delta": {
+      "arns": [],
+      "why": "Covered by another entry's scope; listed so the resource type is accounted for and a reader can see it was considered rather than missed."
+    },
+    "_local": {
+      "arns": [],
+      "why": "Evaluated locally by Terraform and reaches no AWS API."
+    },
+    "iam_oidc_read": {
+      "arns": [
+        "arn:aws:iam::{account}:oidc-provider/token.actions.githubusercontent.com"
+      ],
+      "why": "Read-only on the account's GitHub OIDC provider, created once outside this stack and looked up by iam.tf to build the github_actions role's trust policy. Scoped to the one provider: nothing here may create, update or delete an identity provider."
+    },
+    "iam_lakeformation_slr": {
+      "arns": [
+        "arn:aws:iam::{account}:role/aws-service-role/lakeformation.amazonaws.com/AWSServiceRoleForLakeFormationDataAccess"
+      ],
+      "why": "Lake Formation's own service-linked role. aws_lakeformation_resource.silver sets no role_arn, so RegisterResource registers the location against this role and acts on it AS THE CALLER -- the failures arrive as a LakeFormation 400 wrapping an IAM 403, naming a role that appears nowhere in the Terraform. NOT READ-ONLY, and it took three rounds to learn that one action at a time: GetRole (does it exist), GetRolePolicy (what does it already allow), then PutRolePolicy -- because registering a location is how Lake Formation records which S3 prefixes the role may reach, and it records that in the role's INLINE POLICY. An earlier version of this comment said read-only and was wrong. What keeps it safe is the ARN, not the verbs: one exact path, confirmed against the account rather than assumed, so this cannot reach any other service-linked role, and it carries no CreateRole, DeleteRole, DeleteRolePolicy, AttachRolePolicy or UpdateAssumeRolePolicy. Only needed while registering -- a later apply calls DescribeResource, which touches no IAM, which is why dev's hand-written policy never carried any of it."
+    },
+    "iam_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "iam:ListOpenIDConnectProviders lists every provider in the account and takes no resource condition, so it cannot be scoped to the one provider iam_oidc_read names. Kept as a separate token from iam_oidc_read rather than widening that one, because the widening would silently take GetOpenIDConnectProvider to \"*\" with it -- which is what echo-dev-deploy-2.policy.json's UnscopableReads statement does, and is looser than it needs to be. Get IS scopable; only the list is not. Nothing else belongs here: this token exists for list-shaped IAM reads, and any write action routed to it would be granted account-wide."
+    },
+    "wafv2_unscopable": {
+      "arns": [
+        "*"
+      ],
+      "why": "wafv2:ListRuleGroups is list-shaped and takes no resource. Confirmed ALREADY allowed to the dev role on 2026-09-22 while GetRuleGroup was implicitDeny -- the two are separate grants, and the split matters because waf.tf's data source needs both."
+    },
+    "sqs": {
+      "arns": [
+        "arn:aws:sqs:{region}:{account}:{prefix}-*"
+      ],
+      "why": "The gold root's three dead-letter queues, all on the stack prefix. SQS takes a plain name-shaped ARN with no path, so this is genuinely scopable -- unlike the security-group case below."
+    },
+    "events_control_bus": {
+      "arns": [
+        "arn:aws:events:{region}:{account}:event-bus/uif-event-{env}-*"
+      ],
+      "why": "THE ONE GRANT THAT CROSSES THE STACK'S NAMING BOUNDARY, and it is deliberate. announce.tf creates uif-event-{env}-bus -- the eventing layer's control bus, named for the EVENT stack, not for echo -- with the comment \"Created here because gold is its only publisher today\". So a policy scoped to {prefix}-* alone cannot create it. \n\nThis is the same failure UIFPE-184 records from the other direction: product's dev deploy has failed at CreateEventBus (uif-event-dev-product) on every run since 2026-09-07 because its deploy role is scoped to echo-dev-*. Granting it here for echo's own publisher does not fix product's role, and it is scoped to the event stack's prefix rather than widened to events:*, so the two stay separate decisions. \n\nWorth questioning in review: the alternative is for the eventing layer to own its own bus, which would remove this grant entirely."
+    }
+  },
+  "resources": {
+    "aws_s3_bucket": {
+      "scope": "s3_stack_buckets",
+      "extra_scope": "s3_unscopable",
+      "actions": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:GetBucketLocation",
+        "s3:GetBucketAcl",
+        "s3:GetBucketTagging",
+        "s3:PutBucketTagging",
+        "s3:GetBucketCORS",
+        "s3:GetBucketLogging",
+        "s3:GetBucketObjectLockConfiguration",
+        "s3:GetBucketRequestPayment",
+        "s3:GetAccelerateConfiguration",
+        "s3:GetBucketWebsite",
+        "s3:GetReplicationConfiguration",
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "unscopable_actions": [
+        "s3:ListAllMyBuckets"
+      ],
+      "why": "The read list is long because the aws_s3_bucket resource populates a dozen computed attributes on every refresh, each with its own API call and its own 403. GetBucketAcl in particular already bit apicurio: the bucket was created and kept in state while the post-create read failed, so every later plan hit AccessDenied on a bucket that existed. s3:ListBucketVersions was added on 2026-09-26 after the first uat converge was denied it: copy-artifacts.sh lists the DESTINATION's object versions so the TSV it writes records this environment's version ids rather than the source's, which release-manifest.sh needs for ARTIFACT_FILE. apicurio's promote never version-lists -- it uses crane copy and aws s3 cp -- so its policy has no equivalent and was no guide here. Proven by simulate-principal-policy, which returned implicitDeny for s3:ListBucketVersions on uif-echo-uat-release-artifacts while s3:PutObject on the same bucket was allowed."
+    },
+    "aws_s3_bucket_versioning": {
+      "scope": "s3_stack_buckets",
+      "actions": [
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning"
+      ],
+      "unscopable_actions": [],
+      "why": "Also needed by the release-artifacts bucket at bootstrap, before Terraform owns it -- stage-artifacts.sh fails closed without a version id."
+    },
+    "aws_s3_bucket_public_access_block": {
+      "scope": "s3_stack_buckets",
+      "actions": [
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketPublicAccessBlock"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_s3_bucket_server_side_encryption_configuration": {
+      "scope": "s3_stack_buckets",
+      "actions": [
+        "s3:GetEncryptionConfiguration",
+        "s3:PutEncryptionConfiguration"
+      ],
+      "unscopable_actions": [],
+      "why": "SSE-S3 only. If AVD-AWS-0132 is ever closed with a customer-managed key, this entry gains kms:DescribeKey and kms:CreateGrant and the key's own ARN becomes a new scope -- apicurio needed exactly that for its RDS default key."
+    },
+    "aws_s3_bucket_lifecycle_configuration": {
+      "scope": "s3_stack_buckets",
+      "actions": [
+        "s3:GetLifecycleConfiguration",
+        "s3:PutLifecycleConfiguration"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_s3_bucket_policy": {
+      "scope": "s3_stack_buckets",
+      "actions": [
+        "s3:GetBucketPolicy",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_s3_object": {
+      "scope": "s3_stack_buckets",
+      "actions": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:DeleteObject",
+        "s3:GetObjectTagging",
+        "s3:PutObjectTagging"
+      ],
+      "unscopable_actions": [],
+      "why": "17 objects, all of them the Glue script and jar uploads. On a uif stack most are gated off (count = 0) because scripts arrive content-addressed instead, but the 3 dq-kinds objects and the 2 GCP jars still apply, and the grant is needed for the DELETES the conversion performs."
+    },
+    "aws_glue_job": {
+      "scope": "glue",
+      "extra_scope": "glue_unscopable",
+      "actions": [
+        "glue:CreateJob",
+        "glue:DeleteJob",
+        "glue:GetJob",
+        "glue:UpdateJob",
+        "glue:TagResource",
+        "glue:UntagResource"
+      ],
+      "unscopable_actions": [
+        "glue:GetJobs",
+        "glue:GetTags"
+      ],
+      "why": "11 jobs. glue:GetTags is unscopable and separate from GetJob -- the provider reads a job's tags in its own call, so a policy with GetJob alone refreshes the job and then 403s on its tags."
+    },
+    "aws_glue_connection": {
+      "scope": "glue",
+      "extra_scope": "glue_unscopable",
+      "actions": [
+        "glue:CreateConnection",
+        "glue:DeleteConnection",
+        "glue:GetConnection",
+        "glue:UpdateConnection"
+      ],
+      "unscopable_actions": [
+        "glue:GetConnections"
+      ]
+    },
+    "aws_glue_catalog_database": {
+      "scope": "glue",
+      "extra_scope": "glue_unscopable",
+      "actions": [
+        "glue:CreateDatabase",
+        "glue:DeleteDatabase",
+        "glue:GetDatabase",
+        "glue:UpdateDatabase"
+      ],
+      "unscopable_actions": [
+        "glue:GetDatabases"
+      ],
+      "why": "Underscore-named from glue_db_prefix, which is why the glue scope carries two prefix forms. The control plane also creates databases at pipeline registration time, but that is the LAMBDA role's grant, not the deploy role's."
+    },
+    "aws_dynamodb_table": {
+      "scope": "dynamodb",
+      "actions": [
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:UpdateTable",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTimeToLive"
+      ],
+      "unscopable_actions": [],
+      "why": "6 tables. The four Describe*/Update* pairs beyond the table itself are separate APIs with separate 403s: point_in_time_recovery is DescribeContinuousBackups, and data_quality.tf sets it, so a policy without it creates the table and fails on the read back."
+    },
+    "aws_lakeformation_permissions": {
+      "scope": "lakeformation_unscopable",
+      "actions": [
+        "lakeformation:GrantPermissions",
+        "lakeformation:ListPermissions",
+        "lakeformation:RevokePermissions"
+      ],
+      "unscopable_actions": [],
+      "why": "19 permission resources. Unscopable by API design -- see the scope's note. This is the entry to question hardest in review."
+    },
+    "aws_lakeformation_resource": {
+      "scope": "lakeformation_unscopable",
+      "extra_scope": "iam_stack_roles",
+      "actions": [
+        "lakeformation:RegisterResource",
+        "lakeformation:DeregisterResource",
+        "lakeformation:DescribeResource"
+      ],
+      "unscopable_actions": [],
+      "why": "Registering a data-lake location hands Lake Formation a role to assume, so it needs iam:PassRole on THAT role -- via extra_actions, because PassRole is scopable and belongs on the role's ARN, not on the unscopable Lake Formation scope. It was the other way round until required-actions.py's scope split existed. THE FIRST ENTRY NEEDING TWO extra destinations, which is why extra_actions is a map here: the uat apply of 2026-09-26 (run 36253830424) failed on iam:GetRole against Lake Formation's service-linked role, which is not under role/{prefix}-* and so cannot share iam_stack_roles. Adding it to that scope instead would have falsified that scope's own promise that it cannot touch any other role in the account.",
+      "extra_actions": {
+        "iam_stack_roles": [
+          "iam:PassRole"
+        ],
+        "iam_lakeformation_slr": [
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:PutRolePolicy"
+        ]
+      }
+    },
+    "aws_lambda_function": {
+      "scope": "lambda",
+      "extra_scope": "iam_stack_roles",
+      "actions": [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction",
+        "lambda:PutFunctionConcurrency",
+        "lambda:DeleteFunctionConcurrency",
+        "lambda:GetFunctionConcurrency",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListTags",
+        "lambda:GetPolicy"
+      ],
+      "unscopable_actions": [],
+      "why": "5 functions. iam:PassRole is what lets CreateFunction attach the execution role, and it is the single most commonly missed action in a Lambda policy -- the create fails with an error that names the ROLE, not the missing permission. GetFunctionCodeSigningConfig is read on every refresh even with no signing configured.",
+      "extra_actions": [
+        "iam:PassRole"
+      ]
+    },
+    "aws_lambda_layer_version": {
+      "scope": "lambda",
+      "extra_scope": "s3_stack_buckets",
+      "actions": [
+        "lambda:PublishLayerVersion",
+        "lambda:DeleteLayerVersion",
+        "lambda:GetLayerVersion"
+      ],
+      "unscopable_actions": [],
+      "why": "4 layers, all published FROM S3 rather than a local zip, so PublishLayerVersion needs s3:GetObject on the object it reads -- a cross-service dependency that looks like an S3 problem when it fails. Layer versions do not support tags, so there is no tag action here.",
+      "extra_actions": [
+        "s3:GetObject"
+      ]
+    },
+    "aws_lambda_permission": {
+      "scope": "lambda",
+      "actions": [
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy"
+      ],
+      "unscopable_actions": [],
+      "why": "10 permissions, granting API Gateway and EventBridge the right to invoke."
+    },
+    "aws_cloudwatch_event_rule": {
+      "scope": "events",
+      "actions": [
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:EnableRule",
+        "events:DisableRule",
+        "events:TagResource",
+        "events:UntagResource",
+        "events:ListTagsForResource"
+      ],
+      "unscopable_actions": [],
+      "why": "EnableRule and DisableRule are needed because event_rule_state is a variable this stack flips at cutover -- a policy with PutRule alone cannot change a rule's state."
+    },
+    "aws_cloudwatch_event_target": {
+      "scope": "events",
+      "extra_scope": "iam_stack_roles",
+      "actions": [
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:ListTargetsByRule"
+      ],
+      "unscopable_actions": [],
+      "why": "A target that invokes a Glue job goes through a role, so PassRole applies; a target that invokes a Lambda uses a resource policy instead and does not.",
+      "extra_actions": [
+        "iam:PassRole"
+      ]
+    },
+    "aws_cloudwatch_log_group": {
+      "scope": "logs",
+      "extra_scope": "logs_unscopable",
+      "actions": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource"
+      ],
+      "unscopable_actions": [
+        "logs:DescribeLogGroups"
+      ],
+      "why": "5 groups in this root plus the WAF's, which is in us-east-1 -- see the logs scope. Confirmed ALREADY GRANTED to the dev role on 2026-09-22: CreateLogGroup, PutRetentionPolicy and TagResource all simulated allowed."
+    },
+    "aws_cloudwatch_log_metric_filter": {
+      "scope": "logs",
+      "actions": [
+        "logs:PutMetricFilter",
+        "logs:DeleteMetricFilter",
+        "logs:DescribeMetricFilters"
+      ],
+      "why": "One filter, on the gold retrieval API's own log group (serving_api.tf, UIFPE-521). It turns that Lambda's ENTITY_KEY_NOT_UNIQUE line into a UIF/Gold metric, because a RETURNED 500 never increments Lambda's Errors metric and the refusal would otherwise alarm on nothing. Both actions take a log-group resource, so the existing `logs` scope covers it -- no new scope and no edit to _scopes. DescribeMetricFilters IS needed, and the earlier note here that the apply does not call it was wrong: the AWS provider reads the filter back straight after PutMetricFilter, and again on every later plan's refresh. UAT proved it on 2026-09-29 (UIFPE-665): the echo/v0.11.1 converge failed with AccessDenied on PutMetricFilter, and simulate-principal-policy on uif-echo-uat-deploy-role returned implicitDeny for all three actions, so adding Put and Delete alone would have failed the next round on the read-back. SIMULATED 2026-09-29 on echo-dev-github-actions and uif-echo-dev-github-actions-role: PutMetricFilter, DeleteMetricFilter and DescribeMetricFilters all allowed. Read that narrowly -- the same simulation returns allowed for a PROD log group and for an unrelated function's, so the live grant is NOT prefix-scoped the way this scope describes. It proves the apply will work; it proves nothing about the scope being tight."
+    },
+    "aws_cloudwatch_dashboard": {
+      "scope": "cloudwatch",
+      "extra_scope": "cloudwatch_unscopable",
+      "actions": [
+        "cloudwatch:PutDashboard",
+        "cloudwatch:DeleteDashboards",
+        "cloudwatch:GetDashboard"
+      ],
+      "unscopable_actions": [
+        "cloudwatch:ListDashboards"
+      ]
+    },
+    "aws_cloudwatch_metric_alarm": {
+      "scope": "cloudwatch",
+      "extra_scope": "cloudwatch_unscopable",
+      "actions": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+        "cloudwatch:ListTagsForResource"
+      ],
+      "unscopable_actions": [
+        "cloudwatch:DescribeAlarms"
+      ],
+      "why": "Stale until 2026-09-28: this said 'one alarm, and it has no alarm_actions'. That describes the MAIN root's single alarm, which stacks/echo/CLAUDE.md still records as firing at nobody. The GOLD root carries 13, every one of them invoking gold_alert_notify via local.alert_targets -- a Lambda target, so no sns:Publish is needed and no new scope. The alarm scope is alarm:{prefix}-*, which covers any uif-echo-{env}-* name without an edit here."
+    },
+    "aws_cloudfront_distribution": {
+      "scope": "cloudfront",
+      "actions": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:CreateDistributionWithTags",
+        "cloudfront:CreateInvalidation",
+        "cloudfront:DeleteDistribution",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:ListTagsForResource",
+        "cloudfront:TagResource",
+        "cloudfront:UntagResource",
+        "cloudfront:UpdateDistribution"
+      ],
+      "unscopable_actions": [],
+      "why": "CreateDistributionWithTags, not CreateDistribution: the provider tags at create time when default_tags is set, and the two are SEPARATE IAM actions -- granting only the untagged form fails the moment tags exist, which they now do. CreateInvalidation is here because uif-echo-ui-deploy.sh invalidates after every sync."
+    },
+    "aws_cloudfront_origin_access_control": {
+      "scope": "cloudfront",
+      "actions": [
+        "cloudfront:CreateOriginAccessControl",
+        "cloudfront:DeleteOriginAccessControl",
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:UpdateOriginAccessControl"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_wafv2_web_acl": {
+      "scope": "wafv2",
+      "actions": [
+        "wafv2:CreateWebACL",
+        "wafv2:GetWebACL",
+        "wafv2:UpdateWebACL",
+        "wafv2:DeleteWebACL",
+        "wafv2:TagResource",
+        "wafv2:UntagResource",
+        "wafv2:ListTagsForResource"
+      ],
+      "unscopable_actions": [],
+      "why": "Gated off by var.enable_ui_waf today, so these are not yet needed for an apply -- but the grant has to exist before the flag can flip, and the dev role held NONE of them when simulated on 2026-09-22 (nine of ten implicitDeny)."
+    },
+    "aws_wafv2_ip_set": {
+      "scope": "wafv2",
+      "actions": [
+        "wafv2:CreateIPSet",
+        "wafv2:GetIPSet",
+        "wafv2:UpdateIPSet",
+        "wafv2:DeleteIPSet",
+        "wafv2:TagResource",
+        "wafv2:UntagResource"
+      ],
+      "unscopable_actions": [],
+      "why": "CreateIPSet is the exact call the dev apply would die on with the flag true -- it is the first WAF resource in the graph."
+    },
+    "aws_wafv2_web_acl_logging_configuration": {
+      "scope": "wafv2",
+      "actions": [
+        "wafv2:PutLoggingConfiguration",
+        "wafv2:GetLoggingConfiguration",
+        "wafv2:DeleteLoggingConfiguration"
+      ],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_api": {
+      "scope": "apigateway",
+      "actions": [
+        "apigateway:POST",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:DELETE",
+        "apigateway:PUT",
+        "apigateway:TagResource",
+        "apigateway:UntagResource"
+      ],
+      "unscopable_actions": [],
+      "why": "API Gateway's IAM model is HTTP verbs against path-shaped ARNs, not named operations -- so one verb set covers the api, its routes, integrations, stage and authorizer, and the scope is what does the narrowing."
+    },
+    "aws_apigatewayv2_route": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_integration": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_apigatewayv2_stage": {
+      "scope": "apigateway",
+      "actions": [],
+      "unscopable_actions": [
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies"
+      ],
+      "extra_scope": "logs_unscopable",
+      "why": "The stage's own apigateway calls are covered by the api entry's /apis/* scope, which is what this was marked _in_delta for. But it also sets access_log_settings, and CreateStage then fails with 'Insufficient permissions to enable logging ... not authorized to perform: logs:CreateLogDelivery'. Scope moved off _in_delta because the renderer SKIPS that token entirely -- an entry marked _in_delta cannot carry actions at all, so the logs actions had nowhere to live. This is AWS's documented set for enabling API Gateway logging rather than only the one action that failed: they are one API, the destroy path needs Delete, and adding them one round at a time is how this converge spent four days. None takes a resource. logs:PutResourcePolicy is the widest of them and the one to question first if this ever needs narrowing."
+    },
+    "aws_apigatewayv2_authorizer": {
+      "scope": "_in_delta",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "aws_iam_role": {
+      "scope": "iam_stack_roles",
+      "actions": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:UpdateRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRoleTags",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:PassRole"
+      ],
+      "unscopable_actions": [],
+      "why": "3 roles. The three List* calls are post-create reads the provider makes on every refresh. ListInstanceProfilesForRole looks irrelevant for a Glue or Lambda role and is called anyway."
+    },
+    "aws_iam_role_policy": {
+      "scope": "iam_stack_roles",
+      "actions": [
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:GetRolePolicy"
+      ],
+      "unscopable_actions": [],
+      "why": "Inline policies, evaluated against the ROLE's ARN rather than a policy ARN -- which is why they share the role scope and why this grants nothing over managed policies."
+    },
+    "aws_security_group": {
+      "scope": "ec2_sg",
+      "extra_scope": "ec2_unscopable",
+      "actions": [
+        "ec2:DeleteSecurityGroup",
+        "ec2:DeleteTags"
+      ],
+      "unscopable_actions": [
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateTags",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeTags"
+      ]
+    },
+    "aws_security_group_rule": {
+      "scope": "ec2_sg",
+      "extra_scope": "ec2_unscopable",
+      "actions": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:ModifySecurityGroupRules"
+      ],
+      "unscopable_actions": [
+        "ec2:DescribeSecurityGroupRules"
+      ],
+      "why": "5 rules, three of them the unrestricted-egress ones AVD-AWS-0104 is suppressed on. apicurio conditions ModifySecurityGroupRules on aws:ResourceTag/Project, which is worth copying once Echo's tags are deployed -- and is why dropping the Project key would turn every rule change into an opaque 403 part-way through an apply."
+    },
+    "aws_vpc_endpoint": {
+      "scope": "ec2_sg",
+      "extra_scope": "ec2_unscopable",
+      "actions": [
+        "ec2:DeleteVpcEndpoints",
+        "ec2:ModifyVpcEndpoint",
+        "ec2:DeleteTags"
+      ],
+      "unscopable_actions": [
+        "ec2:CreateVpcEndpoint",
+        "ec2:CreateTags",
+        "ec2:DescribeVpcEndpoints"
+      ],
+      "why": "All three endpoints are FALSE on every uif environment, so nothing is created -- uat deliberately reuses echo-uat's Secrets Manager endpoint, because AWS permits only one per service per VPC with private DNS. The grant stays so a future environment that does own its endpoints is not blocked."
+    },
+    "null_resource": {
+      "scope": "_local",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "terraform_data": {
+      "scope": "_local",
+      "actions": [],
+      "unscopable_actions": [],
+      "why": "artifact_guard.tf's release-artifact precondition. A builtin-provider resource that stores one integer in state; it calls nothing, so the deploy policy needs no action for it."
+    },
+    "aws_sqs_queue": {
+      "scope": "sqs",
+      "actions": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:TagQueue",
+        "sqs:UntagQueue",
+        "sqs:ListQueueTags"
+      ],
+      "unscopable_actions": [],
+      "why": "3 dead-letter queues: gold_alert_notify, gold_announce and gold_serving_sync. GetQueueUrl is what the provider calls before every other read, and ListQueueTags is a separate 403 from GetQueueAttributes -- the same split Glue has between GetJob and GetTags, and the same way a policy passes refresh and then fails."
+    },
+    "aws_sqs_queue_policy": {
+      "scope": "sqs",
+      "actions": [
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes"
+      ],
+      "unscopable_actions": [],
+      "why": "There is no SQS PutPolicy API: the policy IS a queue attribute, so this needs those two calls and nothing more. Listed separately from the queue anyway, because the map is keyed by Terraform type and an unmapped type stops the derivation -- which is the guard working."
+    },
+    "aws_cloudwatch_event_bus": {
+      "scope": "events_control_bus",
+      "actions": [
+        "events:CreateEventBus",
+        "events:DeleteEventBus",
+        "events:DescribeEventBus",
+        "events:TagResource",
+        "events:UntagResource",
+        "events:ListTagsForResource"
+      ],
+      "unscopable_actions": [],
+      "why": "One bus, and the only resource in either root named outside the stack prefix -- see the events_control_bus scope for why that is deliberate and what the alternative is."
+    },
+    "aws_glue_trigger": {
+      "scope": "glue",
+      "extra_scope": "glue_unscopable",
+      "actions": [
+        "glue:CreateTrigger",
+        "glue:DeleteTrigger",
+        "glue:GetTrigger",
+        "glue:UpdateTrigger",
+        "glue:TagResource",
+        "glue:UntagResource"
+      ],
+      "unscopable_actions": [
+        "glue:GetTriggers"
+      ],
+      "why": "2 triggers: the nightly statistics job and the monthly export. A Glue TRIGGER is the only mechanism available for either -- EventBridge has no StartJobRun target and the deploy role holds no scheduler:* (UIFPE-544), so without this grant the two jobs exist and nothing ever starts them. GetTriggers is unscopable and separate from GetTrigger, exactly as GetJobs is from GetJob."
+    },
+    "aws_lambda_function_url": {
+      "scope": "lambda",
+      "actions": [
+        "lambda:CreateFunctionUrlConfig",
+        "lambda:DeleteFunctionUrlConfig",
+        "lambda:GetFunctionUrlConfig",
+        "lambda:UpdateFunctionUrlConfig"
+      ],
+      "unscopable_actions": [],
+      "why": "The gold serving API is a Lambda function URL, not an API Gateway route, so none of the apigateway grants above reach it. Note for anyone verifying by hand: AWS CLI 2.2.5 has no get-function-url-config subcommand, so this one cannot be confirmed from the CLI on the deploy host -- only from the plan or with boto3."
+    },
+    "aws_lambda_function_recursion_config": {
+      "scope": "lambda",
+      "actions": [
+        "lambda:GetFunctionRecursionConfig",
+        "lambda:PutFunctionRecursionConfig"
+      ],
+      "unscopable_actions": [],
+      "why": "Set on the serving sync function so a recursive invoke is terminated rather than billed. Same CLI caveat as the function URL: 2.2.5 has no get-function-recursion-config."
+    },
+    "aws_lambda_function_event_invoke_config": {
+      "scope": "lambda",
+      "actions": [
+        "lambda:GetFunctionEventInvokeConfig",
+        "lambda:PutFunctionEventInvokeConfig",
+        "lambda:UpdateFunctionEventInvokeConfig",
+        "lambda:DeleteFunctionEventInvokeConfig"
+      ],
+      "unscopable_actions": [],
+      "why": "The async retry and dead-letter wiring for the alert, announce and serving-sync functions. Put and Update are separate APIs and the provider uses both, so granting one leaves the other to 403 on a change rather than on the create."
+    },
+    "aws_iam_role_policy_attachment": {
+      "scope": "iam_stack_roles",
+      "actions": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "unscopable_actions": [],
+      "why": "Attaches the AWS-managed Lambda basic-execution and VPC-access policies to gold's roles. ListAttachedRolePolicies is already granted by aws_iam_role; it is repeated here because the map is read per type and an entry that depends on another entry's grant is a trap for whoever deletes the other one."
+    },
+    "aws_lakeformation_resource_lf_tags": {
+      "scope": "lakeformation_unscopable",
+      "actions": [
+        "lakeformation:AddLFTagsToResource",
+        "lakeformation:RemoveLFTagsFromResource",
+        "lakeformation:GetResourceLFTags"
+      ],
+      "unscopable_actions": [],
+      "why": "Puts the uif-echo-gold-layer tag on each gold database so consumer grants are tag-based rather than a list. Unscopable for the same reason aws_lakeformation_permissions is -- the resource travels in the request body. This does NOT include CreateLFTag or UpdateLFTag: the tag itself is created once by hand, and a deploy role that can redefine a tag's allowed values can widen every grant that uses it."
+    },
+    "aws_dynamodb_table_item": {
+      "scope": "dynamodb",
+      "actions": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:DeleteItem"
+      ],
+      "unscopable_actions": [],
+      "why": "Seeds the alert-subscriber rows. Data-plane actions in a DEPLOY policy, which is worth seeing rather than skimming: they are scoped to the stack's tables, and the same three would let the role read or delete any row in them. The alternative is seeding outside Terraform, which is what sync_pipelines already does for the config table."
+    },
+    "aws_vpc_security_group_ingress_rule": {
+      "scope": "ec2_sg",
+      "extra_scope": "ec2_unscopable",
+      "actions": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:DeleteTags"
+      ],
+      "unscopable_actions": [
+        "ec2:CreateTags",
+        "ec2:DescribeSecurityGroupRules"
+      ],
+      "why": "The newer typed form of a rule the top-level root declares as aws_security_group_rule, and it needs the same actions. One ingress rule: the Secrets Manager endpoint's group, so the serving API can read the gateway secret."
+    }
+  },
+  "data": {
+    "aws_caller_identity": {
+      "scope": "sts_self",
+      "actions": [
+        "sts:GetCallerIdentity"
+      ],
+      "unscopable_actions": [],
+      "why": "Not declared in this root today, but every deploy path calls it and the bootstrap script does. Listed so it is not mistaken for an omission."
+    },
+    "aws_subnet": {
+      "scope": "ec2_unscopable",
+      "actions": [
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeVpcs"
+      ],
+      "unscopable_actions": [],
+      "why": "DescribeVpcAttribute is the one to not miss, and apicurio's map records the same trap from the other direction: its aws_vpc data source populates enable_dns_hostnames and enable_dns_support through a SEPARATE call per attribute, so DescribeSubnets alone gets far enough to render most of a plan and then fails on the data source it started from. uat's third plan attempt died exactly there."
+    },
+    "aws_route_table": {
+      "scope": "ec2_unscopable",
+      "actions": [
+        "ec2:DescribeRouteTables"
+      ],
+      "unscopable_actions": [],
+      "why": "Read to decide whether the S3 and DynamoDB gateway endpoints already exist on this subnet's route table."
+    },
+    "aws_secretsmanager_secret": {
+      "scope": "secretsmanager",
+      "actions": [
+        "secretsmanager:DescribeSecret"
+      ],
+      "unscopable_actions": [],
+      "why": "DescribeSecret only. This root resolves the UI login secret's ARN to pass to a Lambda; it never reads the VALUE, and GetSecretValue is deliberately absent -- the Lambda role holds that, not the deploy role."
+    },
+    "aws_iam_openid_connect_provider": {
+      "scope": "iam_oidc_read",
+      "actions": [
+        "iam:GetOpenIDConnectProvider"
+      ],
+      "unscopable_actions": [
+        "iam:ListOpenIDConnectProviders"
+      ],
+      "extra_scope": "iam_unscopable",
+      "why": "The account's GitHub OIDC provider, created once outside this stack and read by iam.tf to build the github_actions role's trust policy. Was marked _skip, which emits NOTHING -- so the rendered policy would have lacked this read and the plan would fail on the data source. Caught by required-actions.py refusing the shape. THEN IT FAILED ANYWAY, on the uat converge of 2026-09-26 (run 36251046059), because iam.tf looks the provider up by `url` and there is no get-by-url API: the provider LISTS every provider in the account to resolve the url to an arn, and only then gets it. Get alone is half the call. This is the list-shaped blindness the file header warns about -- the derivation sees the one provider the data source names and cannot see that reaching it requires reading all of them."
+    },
+    "aws_wafv2_rule_group": {
+      "scope": "wafv2_rulegroup_read",
+      "extra_scope": "wafv2_unscopable",
+      "actions": [
+        "wafv2:GetRuleGroup"
+      ],
+      "unscopable_actions": [
+        "wafv2:ListRuleGroups"
+      ],
+      "why": "ListRuleGroups was ALREADY allowed to the dev role when simulated on 2026-09-22; GetRuleGroup was implicitDeny. Both are needed, and the split matters -- an ungated data source lookup fails every PLAN in every environment, not only the ones that build a web ACL, which is why waf.tf gates the data source as well as the resources."
+    },
+    "aws_iam_policy_document": {
+      "scope": "_local",
+      "actions": [],
+      "unscopable_actions": []
+    },
+    "archive_file": {
+      "scope": "_local",
+      "actions": [],
+      "unscopable_actions": [],
+      "why": "Zips a local directory. On a uif stack these are gated off entirely -- artifacts arrive content-addressed from the release bucket instead -- but the blocks stay for the legacy stacks."
+    },
+    "aws_iam_role": {
+      "scope": "iam_stack_roles",
+      "actions": [
+        "iam:GetRole"
+      ],
+      "unscopable_actions": [],
+      "why": "The gold root LOOKS UP the shared Glue role, uif-echo-{env}-glue-role, rather than declaring it -- one role per estate, shared with the silver jobs. A read, so GetRole alone; the create grants come from the resource entry. This is the lookup at locals.tf that fails the PLAN rather than the apply when the role is absent, so in a new environment the role has to exist before the first gold plan."
+    }
+  }
+}

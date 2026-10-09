@@ -1,0 +1,60 @@
+direction: down
+
+tag: "BUILD TAG   apicurio/v0.2.3\nboth workflows resolve every digest from this manifest.\nlatest is never resolved." {
+  shape: rectangle
+  style: { fill: "#ede7f6"; stroke: "#4527a0"; stroke-width: 4; font-size: 16 }
+}
+
+src: "dev - where the artifacts were built" {
+  style: { fill: "#fafafa"; stroke: "#9e9e9e"; stroke-dash: 3; font-size: 16 }
+  ecr: "uif-apicurio-dev-bff-ecr-repo\nsha256:0ec3b9f2..." { shape: cylinder
+    style: { fill: "#e0f2f1"; stroke: "#00695c"; stroke-width: 2; font-size: 14 } }
+  s3: "uif-apicurio-dev-release-artifacts\n523a46c5....tar.gz" { shape: cylinder
+    style: { fill: "#e0f2f1"; stroke: "#00695c"; stroke-width: 2; font-size: 14 } }
+}
+
+gate: "uat GitHub Environment\n1 required reviewer\naccepts ONLY tags matching apicurio/v*" {
+  shape: hexagon
+  style: { fill: "#fff3e0"; stroke: "#e65100"; stroke-width: 3; font-size: 15 }
+}
+
+infra: "1. INFRA CONVERGES   run 35629110480\ndeploy-apicurio-infra.yml\nterraform apply, one root module,\nbackends/uat.hcl + envs/uat.tfvars\n\nresult: 1 added  2 changed  1 destroyed" {
+  shape: rectangle
+  style: { fill: "#f3e5f5"; stroke: "#6a1b9a"; stroke-width: 3; font-size: 15 }
+}
+
+promo: "2. APP PROMOTES   run 35630647167\npromote-apicurio.yml\ncopy-image.sh + restore-bundle.sh,\nthen an app-only apply, then smoke" {
+  shape: rectangle
+  style: { fill: "#f3e5f5"; stroke: "#6a1b9a"; stroke-width: 3; font-size: 15 }
+}
+
+dst: "uat - the same bytes, not a rebuild" {
+  style: { fill: "#fafafa"; stroke: "#9e9e9e"; stroke-dash: 3; font-size: 16 }
+  ecr2: "uif-apicurio-uat-bff-ecr-repo\nsha256:0ec3b9f2...\nIDENTICAL digest" { shape: cylinder
+    style: { fill: "#e0f2f1"; stroke: "#00695c"; stroke-width: 3; font-size: 14 } }
+  s3b: "uif-apicurio-uat-ui\n523a46c5... restored" { shape: cylinder
+    style: { fill: "#e0f2f1"; stroke: "#00695c"; stroke-width: 2; font-size: 14 } }
+  ecs: "ECS - registry 2/2, bff 1/1" { shape: rectangle
+    style: { fill: "#e8f5e9"; stroke: "#2e7d32"; stroke-width: 2; font-size: 14 } }
+}
+
+smoke: "smoke - QE tier 2\n7 passed, 6 skipped\nincludes the CORS preflight\nand the authorizer 403" {
+  shape: hexagon
+  style: { fill: "#fff3e0"; stroke: "#e65100"; stroke-width: 2; font-size: 15 }
+}
+
+rel: "RELEASE TAG   release/uat/2026-09-21.1\npromoted_from apicurio/v0.2.3\nbff_digest sha256:0ec3b9f2...\nsmoke passed" {
+  shape: rectangle
+  style: { fill: "#e0f2f1"; stroke: "#00695c"; stroke-width: 4; font-size: 16 }
+}
+
+tag -> gate: "a tag push, or a dispatch on the tag" { style: { stroke: "#4527a0"; stroke-width: 2; font-size: 14 } }
+gate -> infra: "approval gates the INTENT,\nnot the plan text" { style: { stroke: "#e65100"; stroke-width: 2; font-size: 14 } }
+infra -> promo: "infra first - see the note on\nfirst-deployment ordering" { style: { stroke: "#6a1b9a"; stroke-width: 2; font-size: 14 } }
+src.ecr -> promo: "copy, prove the\ndigest unchanged" { style: { stroke: "#00695c"; stroke-dash: 3; font-size: 14 } }
+src.s3 -> promo: { style: { stroke: "#00695c"; stroke-dash: 3 } }
+infra -> dst.ecs: "creates and repoints" { style: { stroke: "#6a1b9a"; font-size: 14 } }
+promo -> dst.ecr2: { style: { stroke: "#6a1b9a" } }
+promo -> dst.s3b: { style: { stroke: "#6a1b9a" } }
+dst.ecs -> smoke: { style.stroke: "#e65100" }
+smoke -> rel: "only a green smoke\ncuts a release tag" { style: { stroke: "#00695c"; stroke-width: 3; font-size: 14 } }

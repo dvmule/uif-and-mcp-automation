@@ -1,0 +1,4098 @@
+{
+  "$schema": "../../../../../../../stacks/apicurio/standards/gold-attribute-mapping.schema.json",
+  "domain": "product",
+  "table": "gold_product.product",
+  "registry": {
+    "group": "product",
+    "artifact": "product.product.mapping",
+    "compatibility": "BACKWARD_TRANSITIVE",
+    "tier": "T2"
+  },
+  "drivingTable": "MTL_SYSTEM_ITEMS_B",
+  "entityKey": [
+    {
+      "goldColumn": "inventoryItemId",
+      "drivingColumn": "INVENTORY_ITEM_ID"
+    },
+    {
+      "goldColumn": "organizationId",
+      "drivingColumn": "ORGANIZATION_ID"
+    }
+  ],
+  "rowGroups": {
+    "ukOrgs": {
+      "table": "MTL_PARAMETERS",
+      "column": "ORGANIZATION_CODE",
+      "op": "startsWith",
+      "values": [
+        "01"
+      ],
+      "description": "UK orgs (GBPE): ORGANIZATION_CODE starting 01 — today 01B, 01C, 01D, 01E, 01F, 01G, 01V (MDM codes 103, 102, 104, 181, 321, 221, 242). The prefix rule IS the business rule; the list is informational."
+    },
+    "nonUkOrgs": {
+      "complementOf": "ukOrgs",
+      "description": "Every org NOT in ukOrgs — where digital master-level values fan out by default."
+    }
+  },
+  "transforms": {
+    "roundTo2dp": {
+      "description": "Round to 2 decimal places and keep the exact-decimal type - renders CAST(round({x}, 2) AS DECIMAL(38,2)).",
+      "steps": [
+        {
+          "op": "round",
+          "precision": 2
+        },
+        {
+          "op": "cast",
+          "to": "DECIMAL(38,2)"
+        }
+      ]
+    },
+    "pearsonImageUrl": {
+      "description": "Normalize Pearson cover-image URLs (business rule 2026-08-06): DAM paths (start '/A') get the DAM host+asset prefix; site-relative paths ('/coverimage...', '/bigcovers...') get the images.pearson.com host; everything else (absolute URLs, TBD/N-A sentinels) passes through unchanged.",
+      "cases": [
+        {
+          "when": {
+            "op": "startsWith",
+            "values": [
+              "/A"
+            ]
+          },
+          "then": {
+            "op": "prepend",
+            "text": "https://images.pearson.com/i/79475d28-e560-442f-9d0c-afceca8a145a"
+          }
+        },
+        {
+          "when": {
+            "op": "like",
+            "values": [
+              "/coverimage%",
+              "/bigcovers%"
+            ]
+          },
+          "then": {
+            "op": "prepend",
+            "text": "https://images.pearson.com"
+          }
+        }
+      ],
+      "else": "keep"
+    },
+    "pearsonImageUrlDamOnly": {
+      "description": "Strict variant for coverImageHighRes: DAM paths get the DAM prefix; anything else becomes NULL - HighRes has no legacy URL form.",
+      "cases": [
+        {
+          "when": {
+            "op": "startsWith",
+            "values": [
+              "/A"
+            ]
+          },
+          "then": {
+            "op": "prepend",
+            "text": "https://images.pearson.com/i/79475d28-e560-442f-9d0c-afceca8a145a"
+          }
+        }
+      ],
+      "else": "null"
+    },
+    "convertYN": {
+      "description": "Normalise a yes/no source value to Y or N (owner, 2026-09-10): Yes / YES / yes / Y / y -> Y, No / NO / no / N / n -> N, anything else -> NULL. Reusable across columns.",
+      "cases": [
+        {
+          "when": {
+            "op": "in",
+            "values": [
+              "Yes",
+              "YES",
+              "yes",
+              "Y",
+              "y"
+            ]
+          },
+          "then": {
+            "op": "literal",
+            "text": "Y"
+          }
+        },
+        {
+          "when": {
+            "op": "in",
+            "values": [
+              "No",
+              "NO",
+              "no",
+              "N",
+              "n"
+            ]
+          },
+          "then": {
+            "op": "literal",
+            "text": "N"
+          }
+        }
+      ],
+      "else": "null"
+    },
+    "yesNoToIndicator": {
+      "description": "A yes/no source value as a boolean Indicator: Yes / YES / yes / Y / y -> true, No / NO / no / N / n -> false, anything else -> NULL.",
+      "cases": [
+        {
+          "when": {
+            "op": "in",
+            "values": [
+              "Yes",
+              "YES",
+              "yes",
+              "Y",
+              "y"
+            ]
+          },
+          "then": {
+            "op": "literal",
+            "text": "true"
+          }
+        },
+        {
+          "when": {
+            "op": "in",
+            "values": [
+              "No",
+              "NO",
+              "no",
+              "N",
+              "n"
+            ]
+          },
+          "then": {
+            "op": "literal",
+            "text": "false"
+          }
+        }
+      ],
+      "else": "null",
+      "steps": [
+        {
+          "op": "cast",
+          "to": "BOOLEAN"
+        }
+      ]
+    }
+  },
+  "batch": {
+    "requestedBy": "Reyas Ahamed H",
+    "targetDate": "2026-07-22",
+    "backfillMode": "silent",
+    "newChannel": null
+  },
+  "columns": [
+    {
+      "goldColumnName": "inventoryItemId",
+      "businessDescription": "Oracle internal surrogate. Part of the natural key.",
+      "kind": "scalar",
+      "dataType": "integer",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "INVENTORY_ITEM_ID",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": false
+      },
+      "nullable": false,
+      "notes": "Source workbook listed Data Type as 'bigint', normalized to 'integer' (outside the type enum)."
+    },
+    {
+      "goldColumnName": "organizationId",
+      "businessDescription": "Oracle internal surrogate. Part of the natural key.",
+      "kind": "scalar",
+      "dataType": "integer",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "ORGANIZATION_ID",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": false
+      },
+      "nullable": false,
+      "notes": "Source workbook listed Data Type as 'bigint', normalized to 'integer' (see inventoryItemId note)."
+    },
+    {
+      "goldColumnName": "itemCatalogGroupId",
+      "businessDescription": "Oracle item catalog group of the item: 10002 is the Digital catalog; every other value is a legacy (physical) catalog. The discriminator behind the entity's digital/legacy branch picks.",
+      "kind": "scalar",
+      "dataType": "integer",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "ITEM_CATALOG_GROUP_ID",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": false,
+        "message": false,
+        "api": false
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "productId",
+      "businessDescription": "Item, also known as PPID (Pearson Product Identifier) — the unique identifier used within PDH to distinguish one item from another.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "SEGMENT1",
+        "filter": "SEGMENT1 LIKE 'A%' AND INVENTORY_ITEM_STATUS_CODE NOT IN ('DRAFT', 'ERROR', 'DELETE', 'RETIRED', 'TEMPLATE')"
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": false,
+      "notes": "The filter is TABLE-SCOPED, not column-scoped (recorded here because the intake schema has no table-level filter field): the product table carries only SEGMENT1 'A%' rows — business decision 2026-08-06. 'P%' items are programs (Program entity, UIFPE-62). Dev counts at decision time: A 6,812,321 / P 53,181 / T 413 / N 1; T and N confirmed invalid by the business owner (2026-08-06) and deliberately excluded. Enforced in the mapping SQL WHERE and mirrored as sot_filter in the manifest so reconcile deletes rows reclassified out of the domain."
+    },
+    {
+      "goldColumnName": "organizationCode",
+      "businessDescription": "Alphanumeric organization (Org) code whose numeric part represents the region (e.g. 01 = UK, 02 = Canada) and whose letter represents a particular warehouse; from Oracle inventory organizations.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_PARAMETERS",
+        "column": "ORGANIZATION_CODE",
+        "filter": null,
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "ORGANIZATION_ID",
+              "rightColumn": "ORGANIZATION_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": false,
+      "notes": null
+    },
+    {
+      "goldColumnName": "description",
+      "businessDescription": "Description (Internal)",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "DESCRIPTION",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": false,
+      "notes": null
+    },
+    {
+      "goldColumnName": "longDescription",
+      "businessDescription": "Description (External)",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_TL",
+        "column": "LONG_DESCRIPTION",
+        "filter": "LANGUAGE='US'",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            },
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "ORGANIZATION_ID",
+              "rightColumn": "ORGANIZATION_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": false,
+      "notes": null
+    },
+    {
+      "goldColumnName": "inventoryItemStatus",
+      "businessDescription": "Item Status (Oracle) — the availability status of the item (e.g. ACTIVE). Highly governed: changes require approval by key business stakeholders who are closest to a product's actual availability.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "INVENTORY_ITEM_STATUS_CODE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "Added 2026-08-17. Same source and name as program's inventoryItemStatus — driving-table column, no join."
+    },
+    {
+      "goldColumnName": "itemType",
+      "businessDescription": "Core PDH attribute (User Item Type) indicating whether a product is physical, digital, sold individually, as a pack, a subscription, or a combination thereof.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "ITEM_TYPE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "CONFIRMED 2026-07-22: populate from the respective org's own row (no ORGANIZATION_ID=82 filter)"
+    },
+    {
+      "goldColumnName": "lineOfBusiness",
+      "businessDescription": "Indicates which internal Pearson business an item belongs to; Higher Education, Schools, English Language Teaching and Clinical Assessment are the four most common values.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR40",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "disciplineLevel1",
+      "businessDescription": "Discipline (Level 1) — first of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science); the hierarchy drives the EPT and PIA taxonomies.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR5",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "disciplineLevel2",
+      "businessDescription": "Discipline (Level 2) — second of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science).",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR6",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "disciplineLevel3",
+      "businessDescription": "Discipline (Level 3) — third of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science).",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR7",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "disciplineLevel4",
+      "businessDescription": "Discipline (Level 4) — fourth of four dependent levels identifying the field of study covered in the content of a product (e.g. Science, Mathematics, Political Science).",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR8",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "languageLevel1",
+      "businessDescription": "Language (Level 1) — the language the product is written in; the country of the regional variation is carried in Language (Level 2).",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR27",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "languageLevel2",
+      "businessDescription": "Language (Level 2) — the country of the regional variation of the language (British English vs US English; Mexican Spanish vs Spain Spanish).",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR28",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "learnerStageLevel1",
+      "businessDescription": "Learner Stage (Level 1) — first tier of a two-tier hierarchy indicating the item's place on the customer's lifelong learning journey; values generally correlate to a level of education.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR21",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "learnerStageLevel2",
+      "businessDescription": "Learner Stage (Level 2) — second tier of the two-tier hierarchy indicating the item's place on the customer's lifelong learning journey; values generally correlate to a level of education.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR22",
+        "filter": "ATTR_GROUP_ID = 802",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "digitalEffectiveStartDate",
+      "businessDescription": "Date the product version becomes active.",
+      "kind": "scalar",
+      "dataType": "date",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "D_EXT_ATTR1",
+        "filter": "ATTR_GROUP_ID = 1261",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "digitalVersionNumber",
+      "businessDescription": "Product version identifier.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR1",
+        "filter": "ATTR_GROUP_ID = 1261",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "unitWeightQuantity",
+      "businessDescription": "Weight of the product.",
+      "kind": "scalar",
+      "dataType": "number",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "UNIT_WEIGHT",
+        "filter": null
+      },
+      "transform": {
+        "rule": "roundTo2dp"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "dataType corrected from integer to number (exact decimal, scale 2) on 2026-08-06, measured against dev: 2,425,748 of 4,373,156 non-null source values are fractional (55.5%), minimum -0.66, so an integer cast would truncate real data. Scale 2 is a deliberate precision decision and does round — 44.9% of non-null values carried more than 2 dp at source. 99998/99999 are Oracle TBD/N-A sentinels and are passed through unchanged: Gold does not correct source data."
+    },
+    {
+      "goldColumnName": "weightUomCode",
+      "businessDescription": "Unit of measure for weight.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "WEIGHT_UOM_CODE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "unitLengthQuantity",
+      "businessDescription": "Length of the product.",
+      "kind": "scalar",
+      "dataType": "number",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "UNIT_LENGTH",
+        "filter": null
+      },
+      "transform": {
+        "rule": "roundTo2dp"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "dataType corrected from integer to number (exact decimal, scale 2) on 2026-08-06 — 1,114,229 of 3,326,299 non-null source values are fractional. See unitWeight for the full rationale."
+    },
+    {
+      "goldColumnName": "unitWidthQuantity",
+      "businessDescription": "Width of the product.",
+      "kind": "scalar",
+      "dataType": "number",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "UNIT_WIDTH",
+        "filter": null
+      },
+      "transform": {
+        "rule": "roundTo2dp"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "dataType corrected from integer to number (exact decimal, scale 2) on 2026-08-06 — 1,542,035 of 4,294,263 non-null source values are fractional. Source maximum is 999,980, an out-of-range entry left uncorrected by instruction. See unitWeight for the full rationale."
+    },
+    {
+      "goldColumnName": "unitHeightQuantity",
+      "businessDescription": "Height of the product.",
+      "kind": "scalar",
+      "dataType": "number",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "UNIT_HEIGHT",
+        "filter": null
+      },
+      "transform": {
+        "rule": "roundTo2dp"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "dataType corrected from integer to number (exact decimal, scale 2) on 2026-08-06 — 1,538,449 of 4,294,268 non-null source values are fractional. See unitWeight for the full rationale."
+    },
+    {
+      "goldColumnName": "dimensionUomCode",
+      "businessDescription": "Unit of measure for dimentions.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "DIMENSION_UOM_CODE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": "Typo in source workbook ('dimentions') preserved in goldColumnName and businessDescription for traceability."
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.returnClassCode",
+      "businessDescription": "Returns Class: tells Supply Chain whether the item is eligible for return; values are Always or Never — digital products are generally Never and most physical products Always.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR8",
+        "filter": "ATTR_GROUP_ID = 822",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            },
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "ORGANIZATION_ID",
+              "rightColumn": "ORGANIZATION_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "qualificationLevelName",
+      "businessDescription": "Qualification or certification level.",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR2",
+        "filter": "ATTR_GROUP_ID = 755",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            },
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "ORGANIZATION_ID",
+              "rightColumn": "ORGANIZATION_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "isbn13",
+      "businessDescription": "International Standard Book Number auto-assigned to items in PDH; generally assigned to sellable items in the Higher Education, Schools and English Language Learning lines of business.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR8",
+            "filter": "ATTR_GROUP_ID = 741",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4",
+            "filter": "ATTR_GROUP_ID = 1401",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "UPDATE to existing column — adds the 10002 branch"
+    },
+    {
+      "goldColumnName": "isbn10",
+      "businessDescription": "ISBN-10",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR6",
+            "filter": "ATTR_GROUP_ID = 741",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1418",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "UPDATE to existing column. CONFIRMED 2026-07-22: stray '5391465' in source SQL is a typo — ignored"
+    },
+    {
+      "goldColumnName": "sourceItemNumber",
+      "businessDescription": "Source Item Number: the item's identifier in the originating source system, as held in PDH's product identification group.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR17",
+            "filter": "ATTR_GROUP_ID = 741",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3",
+            "filter": "ATTR_GROUP_ID = 1401",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "owningSubsidiaryCountryCode",
+      "businessDescription": "The official name of the country identified in the Owning Subsidiary.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3",
+            "filter": "ATTR_GROUP_ID = 1162",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3",
+            "filter": "ATTR_GROUP_ID = 1403",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "owningSubsidiaryName",
+      "businessDescription": "Identifies the Pearson source (owner) of the product; interface rules reference it to populate segment 2 of the IP Ownership four-segment attribute in Oracle EBS.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 1162",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 1403",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "ipOwnerCategory",
+      "businessDescription": "IP Owner",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1162",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1403",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "copyrightYear",
+      "businessDescription": "The year in which the copyright of the content is filed with the respective Copyright offices; generally the year of first publication of the item, though exact rules vary across business regions.",
+      "kind": "conditional",
+      "dataType": "integer",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "N_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 821",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "N_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1408",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "editionNumber",
+      "businessDescription": "Numeric value representing the edition of the product. Businesses that offer courses or services rather than products must set it to 1 when the item flows into IPM Fadel for rights clearance or royalties.",
+      "kind": "conditional",
+      "dataType": "integer",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "N_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 820",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "N_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "productClassificationLevel1",
+      "businessDescription": "Product Classification (Level 1) — broadly defines the product (formerly Product Type); dependent on Item Type, and a primary attribute in the data requirements for external catalogs (Pearson.com, OneCRM, Onix feeds).",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR6",
+            "filter": "ATTR_GROUP_ID = 820",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "productClassificationLevel2",
+      "businessDescription": "Product Classification (Level 2) — defines the format of the product (formerly Sub Medium); used with Product Classification (Level 1), Brand and Sub Brand to identify product types in external catalogs.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR7",
+            "filter": "ATTR_GROUP_ID = 820",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "CONFIRMED 2026-07-22: source SQL alias LEVEL1 on the digital branch is a copy-paste error — C_EXT_ATTR4 is level 2"
+    },
+    {
+      "goldColumnName": "deliveryMethod",
+      "businessDescription": "The way in which the customer receives a product or service from Pearson.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR6",
+            "filter": "ATTR_GROUP_ID = 821",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR10",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "brand",
+      "businessDescription": "Public brand name of the product; an official Brand is generally cleared by legal and filed with Trademark offices, and may be a Pearson or third-party value. Often a pre-requisite to Sub Brand and Product URL.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR5",
+            "filter": "ATTR_GROUP_ID = 820",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "subBrand",
+      "businessDescription": "Further defines a product within its Brand; dependent on Brand. An official Sub Brand is generally cleared by legal and filed with Trademark offices, and may be a Pearson or third-party value.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR8",
+            "filter": "ATTR_GROUP_ID = 820",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR5",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "digitalPlatform",
+      "businessDescription": "The underlying technical platform that drives a digital product; used inconsistently across businesses and generally expected to be replaced by Enabling Technology (Levels 1 & 2).",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR13",
+            "filter": "ATTR_GROUP_ID = 821",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR25",
+            "filter": "ATTR_GROUP_ID = 1418",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "finalTextPageCount",
+      "businessDescription": "Final Text Page Count — a production and supply chain attribute defining the number of pages within a text. Required for all printed book products and all eBook products.",
+      "kind": "conditional",
+      "dataType": "integer",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "N_EXT_ATTR5",
+            "filter": "ATTR_GROUP_ID = 818",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "N_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1406",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.sellingRestrictionCode",
+      "businessDescription": "Sales Restriction: whether the product's sale is restricted to or from a specific audience (e.g. Schools, Oasis, Trade, Direct). In North America it is checked ahead of any Rights or Market Restriction.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR12",
+            "filter": "ATTR_GROUP_ID = 800",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 1414",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.discountCode",
+      "businessDescription": "Discount Type: triggers the Oracle EBS calculation that determines the rate of discount due on the item for the most common customer types. Values vary by PDH organization and reflect local business practice.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4",
+            "filter": "ATTR_GROUP_ID = 1173",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1411",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.titleStatusCode",
+      "businessDescription": "Title Status",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1171",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital)",
+          "scope": {
+            "group": "nonUkOrgs"
+          },
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1408",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": "master-level, proliferate to all orgs NOT in the UK list"
+        },
+        {
+          "condition": "10002 (Digital)",
+          "scope": {
+            "group": "ukOrgs"
+          },
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1417",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": "proliferate to all UK orgs — UK orgs (GBPE): 01B, 01C, 01D, 01E, 01F, 01G, 01V (MDM codes 103, 102, 104, 181, 321, 221, 242)"
+        }
+      ],
+      "notes": "ORG-LEVEL. CONFIRMED 2026-07-22 proliferation rule: UK-branch value applies to all UK orgs (GBPE): 01B, 01C, 01D, 01E, 01F, 01G, 01V (MDM codes 103, 102, 104, 181, 321, 221, 242); non-UK master value applies to all remaining orgs"
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.regionalPublicationDate",
+      "businessDescription": "Regional Publication Date: the date on which the product is available for transaction within this organization (e.g. 03B = US, 02B = Canada, 01E = UK); connected to Publication Date outside the Owning Subsidiary.",
+      "kind": "conditional",
+      "dataType": "date",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "D_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1173",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital)",
+          "scope": {
+            "group": "nonUkOrgs"
+          },
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "D_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1408",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": "master-level, proliferate to all orgs NOT in the UK list"
+        },
+        {
+          "condition": "10002 (Digital)",
+          "scope": {
+            "group": "ukOrgs"
+          },
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "D_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1417",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": "proliferate to all UK orgs — UK orgs (GBPE): 01B, 01C, 01D, 01E, 01F, 01G, 01V (MDM codes 103, 102, 104, 181, 321, 221, 242)"
+        }
+      ],
+      "notes": "ORG-LEVEL. Same UK/non-UK proliferation as fulfillmentOrgDetails.titleStatusCode — UK orgs (GBPE): 01B, 01C, 01D, 01E, 01F, 01G, 01V (MDM codes 103, 102, 104, 181, 321, 221, 242)"
+    },
+    {
+      "goldColumnName": "accessDurationType",
+      "businessDescription": "Access Duration Type — one of the three Access Duration attributes that together reflect how long a customer can use a product; 'N/A' where the product may be offered with multiple durations.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 773",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "accessDurationQuantity",
+      "businessDescription": "Access Duration Value — one of the three Access Duration attributes that together reflect how long a customer can use a product; required for subscription-based products with a single, definable access length.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 773",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR9",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "accessDurationUnitCode",
+      "businessDescription": "Access Duration Unit — one of the three Access Duration attributes (Type, Value, Unit) that together reflect how long a customer can use a product.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3",
+            "filter": "ATTR_GROUP_ID = 773",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR6",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "courseDurationQuantity",
+      "businessDescription": "Course Duration Value — with Course Duration Unit, represents the length of time a course will take to complete; distinct from Access Duration, which is how long a customer can access the materials.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1341",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR8",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "Added 2026-09-07 (UIFPE-270), owner's reference query: digital items read PSON_EXTER_PROD_CLASSIFICATION (1381) slot 8, everything else PSON_COURSE_DURATION (1341, id confirmed by the owner) slot 1. Placed after durationUnit at the owner's request. Kept as a string like durationValue; dev values are small integers ('4') on the legacy side and almost entirely sentinels on the digital side (NULL since UIFPE-268)."
+    },
+    {
+      "goldColumnName": "courseDurationUnitCode",
+      "businessDescription": "Course Duration Unit — with Course Duration Value, represents the length of time a course will take to complete; distinct from Access Duration, which is how long a customer can access the materials.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 1341",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR11",
+            "filter": "ATTR_GROUP_ID = 1381",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "Added 2026-09-07 (UIFPE-270): the unit half of the pair — 1381 slot 11 / 1341 slot 2 ('hours' on the legacy side)."
+    },
+    {
+      "goldColumnName": "coverImageLargeUrl",
+      "businessDescription": "Large product image URL. The URL indicates whether a product image has been loaded into Alfresco so it can be displayed within PDH, on Pearson's catalogs, or on non-Pearson sites through the Onix feeds.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3",
+            "filter": "ATTR_GROUP_ID = 1168",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3",
+            "filter": "ATTR_GROUP_ID = 1405",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "transform": {
+        "rule": "pearsonImageUrl"
+      },
+      "notes": "URL normalization is the pearsonImageUrl transform (business rule 2026-08-06), applied after the branch pick. Pass-through covers the images.pearsoned-ema.com/jpeg/large absolute URLs the business rule lists explicitly, and the TBD/N-A string sentinels - kept as-is per the keep-source-data instruction."
+    },
+    {
+      "goldColumnName": "coverImageRegularUrl",
+      "businessDescription": "Regular product image URL. The URL indicates whether a product image has been loaded into Alfresco so it can be displayed within PDH, on Pearson's catalogs, or on non-Pearson sites through the Onix feeds.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4",
+            "filter": "ATTR_GROUP_ID = 1168",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1405",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "transform": {
+        "rule": "pearsonImageUrl"
+      },
+      "notes": "URL normalization is the pearsonImageUrl transform, applied after the branch pick. The site-relative pattern was corrected 2026-08-07 from the business rule's original '/covers%' (matched 0 dev rows) to '/coverimage%' - the real Regular shape is '/coverimage/<isbn>.jpg', 1,567,297 dev rows. Pass-through includes absolute URLs and the TBD/N-A sentinels."
+    },
+    {
+      "goldColumnName": "coverImageHighResolutionUrl",
+      "businessDescription": "Product Image URL (High Res)",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR5",
+            "filter": "ATTR_GROUP_ID = 1168",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 1405",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "transform": {
+        "rule": "pearsonImageUrlDamOnly"
+      },
+      "notes": "URL normalization is the pearsonImageUrlDamOnly transform, applied after the branch pick - STRICTER than the other two covers: HighRes has no legacy URL form, so non-DAM paths (1,886 of 275,884 non-null dev values, incl. TBD sentinels) are deliberately nulled rather than passed through. Promoted to the event channel 2026-09-07 (owner decision, UIFPE-270)."
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.imprintName",
+      "businessDescription": "Imprint: the name of the publisher, typically Pearson for most lines of business; some business areas persist with older values such as Addison-Wesley or Pearson Learning Solutions.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR14",
+            "filter": "ATTR_GROUP_ID = 800",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4",
+            "filter": "ATTR_GROUP_ID = 1403",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "nonDisclosureAgreementIndicator",
+      "businessDescription": "When Yes, prevents an item going into external feeds before it is expected to. A legacy catch-all for the External Communication Indicator and Web Consuming System, used only in the US IT Professional division.",
+      "kind": "conditional",
+      "dataType": "boolean",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR16",
+            "filter": "ATTR_GROUP_ID = 821",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR24",
+            "filter": "ATTR_GROUP_ID = 1418",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "Added 2026-08-17. Both groups already feed this entity (821 legacy, 1418 digital) — item-level, like their existing columns.",
+      "transform": {
+        "rule": "yesNoToIndicator"
+      }
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.productTaxClassificationCode",
+      "businessDescription": "Product Tax Classification: triggers the Oracle EBS calculation of how much tax/VAT, if any, the customer owes on the product. Values vary by PDH organization and align with each country's tax laws.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1170",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4",
+            "filter": "ATTR_GROUP_ID = 1411",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "Added 2026-08-17. Org-level, like its struct siblings: 1411 already feeds discountCode (digital); 1170 is a NEW legacy org-level group — its (item, org) grain is asserted from the sibling pattern, verify on first load."
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.relevanceValue",
+      "businessDescription": "Relevance Value: part of the Product Relevance group that drives product visibility and sales prioritization across Pearson catalogs, predominantly OneCRM. Held per fulfillment organization.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR10",
+            "filter": "ATTR_GROUP_ID = 800",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1413",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                },
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "ORGANIZATION_ID",
+                  "rightColumn": "ORGANIZATION_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "Added 2026-08-17. STRING deliberately, not integer: both sources are C_EXT (text) slots and Gold never corrects source data (the unitWeight lesson) — program's relevanceValue is integer from an N_EXT slot, so alignment is a business question for the first load. 800 already feeds sellingRestrictionCode/imprint (legacy org-level); 1413 is a NEW digital group — grain asserted from the sibling pattern (1411/1414), verify on first load."
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.marketingInitiative",
+      "businessDescription": "Marketing Initiative: associates the product with strategic initiatives for this fulfillment organization, with each initiative's start and end dates; populated on saleable products only.",
+      "kind": "nested",
+      "joinKey": "(INVENTORY_ITEM_ID, ORGANIZATION_ID) → (item, org)",
+      "filter": "ATTR_GROUP_ID = 1141 AND (C_EXT_ATTR1 IS NOT NULL OR D_EXT_ATTR1 IS NOT NULL OR D_EXT_ATTR2 IS NOT NULL)",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "marketingInitiativeName",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "marketingInitiativeStartDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "D_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "marketingInitiativeEndDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "D_EXT_ATTR2"
+          }
+        }
+      ],
+      "notes": "Added 2026-09-07 (UIFPE-270). Group 1141 PSON_MARKETING_INITIATIVE_ORG is ORG-level (20 orgs in dev) with several rows per (item, org) — up to 4 — so this is an array inside the fulfillmentOrgDetails struct rather than three scalar members; not conditional (both catalog sides use the group). Sorted by (marketingInitiative, startDate); the primary sort field is marked here. Rows whose every value is NULL (incl. sentinels, UIFPE-268) are dropped by the declared filter. An item-org with no initiatives gets [] when the struct exists for other reasons; the struct's all-null gate treats an absent array as null."
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.backOrderIndicator",
+      "businessDescription": "Back Order Flag",
+      "kind": "scalar",
+      "dataType": "boolean",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR2",
+        "filter": "ATTR_GROUP_ID = 1171 AND ITEM_CATALOG_GROUP_ID <> 10002",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            },
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "ORGANIZATION_ID",
+              "rightColumn": "ORGANIZATION_ID"
+            }
+          ]
+        }
+      },
+      "transform": {
+        "rule": "yesNoToIndicator"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.defaultSalesOrderSourceTypeCode",
+      "businessDescription": "Default sales order source type for the fulfillment organization",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "MTL_SYSTEM_ITEMS_B",
+        "column": "DEFAULT_SO_SOURCE_TYPE",
+        "filter": null
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "parentProductId",
+      "businessDescription": "PPID of the Item deemed the head of household within this product's program family; equivalent to ISBN13 (Parent), and self-associated on the product deemed the parent.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2",
+            "filter": "ATTR_GROUP_ID = 1164",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR9",
+            "filter": "ATTR_GROUP_ID = 1401",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "derivation": {
+        "sql": "WITH ag1401 AS (\n  SELECT CAST(INVENTORY_ITEM_ID AS BIGINT) AS iid,\n         max(C_EXT_ATTR4) AS isbn13,\n         max(C_EXT_ATTR9) AS parentProductId\n  FROM items_ext WHERE ATTR_GROUP_ID = 1401 AND ITEM_CATALOG_GROUP_ID = 10002 GROUP BY 1\n),\nag741 AS (\n  SELECT CAST(INVENTORY_ITEM_ID AS BIGINT) AS iid,\n         max(C_EXT_ATTR8) AS isbn13\n  FROM items_ext WHERE ATTR_GROUP_ID = 741 AND ITEM_CATALOG_GROUP_ID <> 10002 GROUP BY 1\n),\nag1164 AS (\n  SELECT CAST(INVENTORY_ITEM_ID AS BIGINT) AS iid,\n         max(C_EXT_ATTR2) AS parentIsbn13\n  FROM items_ext WHERE ATTR_GROUP_ID = 1164 AND ITEM_CATALOG_GROUP_ID <> 10002 GROUP BY 1\n),\nisbn_owner AS (\n  SELECT isbn13, min(productId) AS productId\n  FROM (\n    SELECT COALESCE(dig.isbn13, leg.isbn13) AS isbn13, ia.SEGMENT1 AS productId\n    FROM items_all ia\n    LEFT JOIN ag1401 dig ON CAST(ia.INVENTORY_ITEM_ID AS BIGINT) = dig.iid\n    LEFT JOIN ag741  leg ON CAST(ia.INVENTORY_ITEM_ID AS BIGINT) = leg.iid\n    WHERE ia.SEGMENT1 LIKE 'A%'\n  ) AS owners\n  WHERE isbn13 IS NOT NULL\n  GROUP BY isbn13\n)\nSELECT CAST(items.INVENTORY_ITEM_ID AS BIGINT) AS iid,\n       CAST(items.ORGANIZATION_ID  AS BIGINT)  AS oid,\n       COALESCE(ag1401.parentProductId, powner.productId) AS parentProductId\nFROM items\nLEFT JOIN ag1401 ON CAST(items.INVENTORY_ITEM_ID AS BIGINT) = ag1401.iid\nLEFT JOIN ag1164 ON CAST(items.INVENTORY_ITEM_ID AS BIGINT) = ag1164.iid\nLEFT JOIN isbn_owner powner ON ag1164.parentIsbn13 = powner.isbn13",
+        "keyedBy": [
+          {
+            "queryColumn": "iid",
+            "entityColumn": "INVENTORY_ITEM_ID"
+          },
+          {
+            "queryColumn": "oid",
+            "entityColumn": "ORGANIZATION_ID"
+          }
+        ],
+        "valueColumn": "parentProductId",
+        "reads": {
+          "items": [
+            "INVENTORY_ITEM_ID",
+            "ORGANIZATION_ID"
+          ],
+          "items_all": [
+            "INVENTORY_ITEM_ID",
+            "SEGMENT1"
+          ],
+          "items_ext": [
+            "ATTR_GROUP_ID",
+            "C_EXT_ATTR2",
+            "C_EXT_ATTR4",
+            "C_EXT_ATTR8",
+            "C_EXT_ATTR9",
+            "INVENTORY_ITEM_ID",
+            "ITEM_CATALOG_GROUP_ID"
+          ]
+        }
+      },
+      "notes": "Added 2026-08-17. Multi-hop on the ELSE branch — carries its own query (derivation.sql, ADR-0008: the query is the contract): 1164.C_EXT_ATTR2 is the parent's ISBN-13, which the SQL resolves to the parent's PPID via an isbn13→ppid index over ALL products (items_all + digital 1401.C_EXT_ATTR4 / legacy 741.C_EXT_ATTR8), collapsed deterministically with min(ppid) — an unordered pick would churn channel hashes every run (acceptance check A8). The digital branch is the parent PPID directly. Parent renames are a change on ANOTHER item's row and are not change-detected — refresh-columns candidate."
+    },
+    {
+      "goldColumnName": "contributors",
+      "businessDescription": "Multi-row Contributor group associating information about the author, contributor, or editor to the product record; details should be maintained based on the region that holds the contract with that contributor.",
+      "kind": "nested",
+      "joinKey": "INVENTORY_ITEM_ID → item (fans out to all orgs)",
+      "filter": "ATTR_GROUP_ID = 798",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "contributorId",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR9"
+          }
+        },
+        {
+          "name": "contributionRoleCode",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "contributorSortSequence",
+          "type": "integer",
+          "sortKey": true,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR10"
+          },
+          "transform": {
+            "steps": [
+              {
+                "op": "cast",
+                "to": "INT"
+              }
+            ]
+          }
+        },
+        {
+          "name": "contributorPreNominalTitle",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2"
+          }
+        },
+        {
+          "name": "contributorGivenName",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3"
+          }
+        },
+        {
+          "name": "contributorAdditionalName",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4"
+          }
+        },
+        {
+          "name": "contributorFamilyName",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR5"
+          }
+        },
+        {
+          "name": "contributorPostNominalTitle",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR6"
+          }
+        },
+        {
+          "name": "affiliationType1",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR11"
+          }
+        },
+        {
+          "name": "affiliation1",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR12"
+          }
+        },
+        {
+          "name": "affiliationType2",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR13"
+          }
+        },
+        {
+          "name": "affiliation2",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR14"
+          }
+        },
+        {
+          "name": "affiliationType3",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR15"
+          }
+        },
+        {
+          "name": "affiliation3",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR16"
+          }
+        }
+      ],
+      "notes": "sort key RANK is stored as text — cast to int for ordering"
+    },
+    {
+      "goldColumnName": "webConsumingSystem",
+      "businessDescription": "Regional Pearson catalogs the product data is sent to, each with its end date — a Web Consuming System value cannot be removed once associated and must be end-dated.",
+      "kind": "nested",
+      "joinKey": "INVENTORY_ITEM_ID → item (fans out to all orgs)",
+      "filter": "ATTR_GROUP_ID = 1121 AND C_EXT_ATTR1 IS NOT NULL",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "wcsName",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "endDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "D_EXT_ATTR1"
+          }
+        }
+      ],
+      "notes": "2026-09-07 (UIFPE-270, owner item 10): was a plain string array of C_EXT_ATTR1; now a struct array carrying the end date — group 1121 PSON_EXTERNAL_COMM_INDICATOR: C_EXT_ATTR1 WEB_CONSUMING_SYSTEM → wcsName, D_EXT_ATTR1 ECI_RELEASE_DATE ('End Date') → endDate. Sorted by (wcsName, endDate). BREAKING for consumers of the previous string array on every channel. Source column history: corrected from C_EXT_ATTR11 to C_EXT_ATTR1 on 2026-08-06 — ATTR11 is null for all 2,138,095 rows of group 1121 and produced an empty array on every Gold row; ATTR1 carries the values (WEB_IPM, WEB_CA_Oasis, WEB_US_OneCRM, ...). The source workbook still shows the typo. wcsName is REQUIRED (owner, 2026-09-08): a row with an ECI_RELEASE_DATE but no system name is dropped by the declared filter — 319 such elements appeared in the first load."
+    },
+    {
+      "goldColumnName": "associatedPrograms",
+      "businessDescription": "PPIDs of the Programs this product is associated with — a Program is an organizational construct that groups products together based on market-driven offers.",
+      "kind": "nested",
+      "joinKey": "INVENTORY_ITEM_ID → item (fans out to all orgs)",
+      "filter": "ATTR_GROUP_ID = 1421",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "value",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          }
+        }
+      ],
+      "notes": null
+    },
+    {
+      "goldColumnName": "marketingCopy",
+      "businessDescription": "Multi-row group relating marketing copy content created in the Marketing Copy UI to items within PDH.",
+      "kind": "nested",
+      "joinKey": "INVENTORY_ITEM_ID → item (fans out to all orgs)",
+      "filter": "ATTR_GROUP_ID = 1181",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "contentId",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "marketingCopyText",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2"
+          }
+        },
+        {
+          "name": "marketingCopyTypeCode",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3"
+          }
+        },
+        {
+          "name": "audienceCode",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4"
+          }
+        },
+        {
+          "name": "geoVisibilityCode",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR5"
+          }
+        },
+        {
+          "name": "owningMarketCode",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR7"
+          }
+        },
+        {
+          "name": "contentUrl",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          },
+          "transform": {
+            "sqlExpr": "CASE WHEN {x} IS NOT NULL THEN concat('{content_url_base}/marketing-copy/', {x}) END"
+          }
+        }
+      ],
+      "notes": "contentUrl (UIFPE-253) is derived from contentId; {content_url_base} is a per-env config sql_var (the content service's gateway base, .../uif/v1)."
+    },
+    {
+      "goldColumnName": "standardComponents",
+      "businessDescription": "Components of this product's Pearson Standard BOM ('Pearson Standard' structure) — generally two or more of the same or multiple components whose BOM Enabled Flag = Yes.",
+      "kind": "nested",
+      "joinKey": "BOM_BILL_OF_MATERIALS.ASSEMBLY_ITEM_ID → item; components attach via BILL_SEQUENCE_ID (fans out to all orgs)",
+      "filter": "BOM_STRUCTURE_TYPES_B.STRUCTURE_TYPE_NAME = 'Pearson Standard' AND BOM_BILL_OF_MATERIALS.ALTERNATE_BOM_DESIGNATOR IS NULL AND bill on the master org (header) AND BOM_COMPONENTS_EXT_B.ATTR_GROUP_ID = 1184 (UDA rows)",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "componentProductId",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "MTL_SYSTEM_ITEMS_B",
+            "column": "SEGMENT1",
+            "filter": null,
+            "join": {
+              "type": "inner",
+              "on": [
+                {
+                  "leftTable": "BOM_COMPONENTS_B",
+                  "leftColumn": "COMPONENT_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "sequenceNumber",
+          "type": "integer",
+          "sortKey": true,
+          "source": {
+            "table": "BOM_COMPONENTS_B",
+            "column": "ITEM_NUM",
+            "filter": null,
+            "join": {
+              "type": "inner",
+              "on": [
+                {
+                  "leftTable": "BOM_BILL_OF_MATERIALS",
+                  "leftColumn": "BILL_SEQUENCE_ID",
+                  "rightColumn": "BILL_SEQUENCE_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "componentQuantity",
+          "type": "number",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_B",
+            "column": "COMPONENT_QUANTITY",
+            "filter": null
+          }
+        },
+        {
+          "name": "componentEffectiveDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_B",
+            "column": "EFFECTIVITY_DATE",
+            "filter": null
+          }
+        },
+        {
+          "name": "componentFinalPageCount",
+          "type": "integer",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "N_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1184",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "BOM_COMPONENTS_B",
+                  "leftColumn": "BILL_SEQUENCE_ID",
+                  "rightColumn": "BILL_SEQUENCE_ID"
+                },
+                {
+                  "leftTable": "BOM_COMPONENTS_B",
+                  "leftColumn": "COMPONENT_SEQUENCE_ID",
+                  "rightColumn": "COMPONENT_SEQUENCE_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "discountType",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "C_EXT_ATTR1",
+            "filter": null
+          }
+        },
+        {
+          "name": "discountAmount",
+          "type": "number",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "N_EXT_ATTR3",
+            "filter": null
+          }
+        },
+        {
+          "name": "componentDisabledDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_B",
+            "column": "DISABLE_DATE",
+            "filter": null
+          }
+        }
+      ],
+      "notes": "POPULATED 2026-09-07 (UIFPE-269) from the registered bom_* Silver sources; the 2026-08-17 contract-first empty array is gone. Carries its own query (derivation.sql, ADR-0008) because it joins four tables (bill header → structure type → components → component item's SEGMENT1 via items_all, plus the UDA rows). Bills are read from the MASTER org only (99.99% of the 345,597 bills in dev; 46 sit on nine other orgs) and primary structures only (ALTERNATE_BOM_DESIGNATOR IS NULL), so one item's components are one list for every org row. Structure type by NAME ('Pearson Standard'); UDA group by id (1184) because EGO_ATTR_GROUPS_V is not in Silver. Change detection: the bill header carries ASSEMBLY_ITEM_ID (keyed source bom_bills); components / UDA rows / structure types are lookup_only, so a component-only edit lands via the daily schedule.refresh on this column (pipeline config, the price precedent). Sorted by sequenceNumber (ITEM_NUM) then ppid.",
+      "derivation": {
+        "sql": "WITH master_org AS (\n  SELECT min(CAST(ORGANIZATION_ID AS BIGINT)) AS oid\n  FROM org_params\n  WHERE CAST(ORGANIZATION_ID AS BIGINT) = CAST(MASTER_ORGANIZATION_ID AS BIGINT)\n),\nbom_struct AS (\n  SELECT CAST(STRUCTURE_TYPE_ID AS BIGINT) AS stid,\n         max(STRUCTURE_TYPE_NAME)          AS structureTypeName\n  FROM bom_structure_types GROUP BY 1\n),\nbom_hdr AS (\n  SELECT CAST(b.ASSEMBLY_ITEM_ID AS BIGINT)  AS iid,\n         CAST(COALESCE(b.COMMON_BILL_SEQUENCE_ID, b.BILL_SEQUENCE_ID) AS BIGINT) AS bsid,\n         s.structureTypeName                 AS structureTypeName\n  FROM bom_bills b\n  JOIN bom_struct s ON CAST(b.STRUCTURE_TYPE_ID AS BIGINT) = s.stid\n  JOIN master_org m ON CAST(b.ORGANIZATION_ID AS BIGINT) = m.oid\n  WHERE s.structureTypeName IN ('Pearson Standard', 'PEARSON_CUSTOM')\n    AND b.ALTERNATE_BOM_DESIGNATOR IS NULL\n),\ncomp_items AS (\n  SELECT CAST(INVENTORY_ITEM_ID AS BIGINT) AS iid, max(SEGMENT1) AS componentProductId\n  FROM items_all GROUP BY 1\n),\nbom_comp AS (\n  SELECT h.iid, h.structureTypeName, h.bsid,\n         CAST(c.COMPONENT_SEQUENCE_ID AS BIGINT) AS csid,\n         ci.componentProductId                                 AS componentProductId,\n         CAST(c.ITEM_NUM AS INT)                 AS sequenceNumber,\n         CAST(c.COMPONENT_QUANTITY AS DECIMAL(38,2)) AS componentQuantity,\n         CAST(c.EFFECTIVITY_DATE AS DATE)        AS componentEffectiveDate,\n         CAST(c.DISABLE_DATE AS DATE)            AS componentDisabledDate\n  FROM bom_hdr h\n  JOIN bom_components c ON CAST(c.BILL_SEQUENCE_ID AS BIGINT) = h.bsid\n  JOIN comp_items ci   ON CAST(c.COMPONENT_ITEM_ID AS BIGINT) = ci.iid\n),\nbom_uda_std AS (\n  SELECT CAST(BILL_SEQUENCE_ID AS BIGINT)      AS bsid,\n         CAST(COMPONENT_SEQUENCE_ID AS BIGINT) AS csid,\n         max(CAST(N_EXT_ATTR1 AS INT))         AS componentFinalPageCount,\n         max(C_EXT_ATTR1)                      AS discountType,\n         max(CAST(N_EXT_ATTR3 AS DECIMAL(38,2))) AS discountAmount\n  FROM bom_components_ext WHERE ATTR_GROUP_ID = 1184 GROUP BY 1, 2\n),\nbom_uda_cust AS (\n  SELECT CAST(BILL_SEQUENCE_ID AS BIGINT)      AS bsid,\n         CAST(COMPONENT_SEQUENCE_ID AS BIGINT) AS csid,\n         max(CAST(N_EXT_ATTR1 AS DECIMAL(38,2))) AS originalWorkPercent,\n         max(CAST(N_EXT_ATTR2 AS DECIMAL(38,2))) AS customWorkPercent,\n         CAST(max(D_EXT_ATTR1) AS DATE)        AS componentEffectiveDate,\n         max(CAST(N_EXT_ATTR3 AS INT))         AS componentFinalPageCount,\n         max(CAST(N_EXT_ATTR4 AS DECIMAL(38,2))) AS overridePercent\n  FROM bom_components_ext WHERE ATTR_GROUP_ID = 1185 GROUP BY 1, 2\n)\nSELECT c.iid,\n       transform(\n         array_sort(collect_list(named_struct(\n           's1', c.sequenceNumber,\n           's2', c.componentProductId,\n           'p', named_struct(\n             'componentProductId',              c.componentProductId,\n             'sequenceNumber',    c.sequenceNumber,\n             'componentQuantity', c.componentQuantity,\n             'componentEffectiveDate',     c.componentEffectiveDate,\n             'componentFinalPageCount',    u.componentFinalPageCount,\n             'discountType',      u.discountType,\n             'discountAmount',     u.discountAmount,\n             'componentDisabledDate',      c.componentDisabledDate\n           )))),\n         x -> x.p) AS standardComponents\nFROM bom_comp c\nLEFT JOIN bom_uda_std u ON u.bsid = c.bsid AND u.csid = c.csid\nWHERE c.structureTypeName = 'Pearson Standard'\nGROUP BY 1",
+        "keyedBy": [
+          {
+            "queryColumn": "iid",
+            "entityColumn": "INVENTORY_ITEM_ID"
+          }
+        ],
+        "valueColumn": "standardComponents",
+        "reads": {
+          "bom_bills": [
+            "ALTERNATE_BOM_DESIGNATOR",
+            "ASSEMBLY_ITEM_ID",
+            "BILL_SEQUENCE_ID",
+            "COMMON_BILL_SEQUENCE_ID",
+            "ORGANIZATION_ID",
+            "STRUCTURE_TYPE_ID"
+          ],
+          "bom_components": [
+            "BILL_SEQUENCE_ID",
+            "COMPONENT_ITEM_ID",
+            "COMPONENT_QUANTITY",
+            "COMPONENT_SEQUENCE_ID",
+            "DISABLE_DATE",
+            "EFFECTIVITY_DATE",
+            "ITEM_NUM"
+          ],
+          "bom_components_ext": [
+            "ATTR_GROUP_ID",
+            "BILL_SEQUENCE_ID",
+            "COMPONENT_SEQUENCE_ID",
+            "C_EXT_ATTR1",
+            "D_EXT_ATTR1",
+            "N_EXT_ATTR1",
+            "N_EXT_ATTR2",
+            "N_EXT_ATTR3",
+            "N_EXT_ATTR4"
+          ],
+          "bom_structure_types": [
+            "STRUCTURE_TYPE_ID",
+            "STRUCTURE_TYPE_NAME"
+          ],
+          "items_all": [
+            "INVENTORY_ITEM_ID",
+            "SEGMENT1"
+          ],
+          "org_params": [
+            "MASTER_ORGANIZATION_ID",
+            "ORGANIZATION_ID"
+          ]
+        }
+      }
+    },
+    {
+      "goldColumnName": "customComponents",
+      "businessDescription": "Components of this product's Pearson Custom BOM, also known as a 'Royalty BOM' ('PEARSON_CUSTOM' structure) — at least one component allocates royalties to an author.",
+      "kind": "nested",
+      "joinKey": "BOM_BILL_OF_MATERIALS.ASSEMBLY_ITEM_ID → item; components attach via BILL_SEQUENCE_ID (fans out to all orgs)",
+      "filter": "BOM_STRUCTURE_TYPES_B.STRUCTURE_TYPE_NAME = 'PEARSON_CUSTOM' AND BOM_BILL_OF_MATERIALS.ALTERNATE_BOM_DESIGNATOR IS NULL AND bill on the master org (header) AND BOM_COMPONENTS_EXT_B.ATTR_GROUP_ID = 1185 (UDA rows)",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "componentProductId",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "MTL_SYSTEM_ITEMS_B",
+            "column": "SEGMENT1",
+            "filter": null,
+            "join": {
+              "type": "inner",
+              "on": [
+                {
+                  "leftTable": "BOM_COMPONENTS_B",
+                  "leftColumn": "COMPONENT_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "originalWorkPercent",
+          "type": "number",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "N_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1185",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "BOM_COMPONENTS_B",
+                  "leftColumn": "BILL_SEQUENCE_ID",
+                  "rightColumn": "BILL_SEQUENCE_ID"
+                },
+                {
+                  "leftTable": "BOM_COMPONENTS_B",
+                  "leftColumn": "COMPONENT_SEQUENCE_ID",
+                  "rightColumn": "COMPONENT_SEQUENCE_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "customWorkPercent",
+          "type": "number",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "N_EXT_ATTR2",
+            "filter": null
+          }
+        },
+        {
+          "name": "componentEffectiveDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "D_EXT_ATTR1",
+            "filter": null
+          }
+        },
+        {
+          "name": "componentFinalPageCount",
+          "type": "integer",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "N_EXT_ATTR3",
+            "filter": null
+          }
+        },
+        {
+          "name": "overridePercent",
+          "type": "number",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_EXT_B",
+            "column": "N_EXT_ATTR4",
+            "filter": null
+          }
+        },
+        {
+          "name": "componentDisabledDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "BOM_COMPONENTS_B",
+            "column": "DISABLE_DATE",
+            "filter": null,
+            "join": {
+              "type": "inner",
+              "on": [
+                {
+                  "leftTable": "BOM_BILL_OF_MATERIALS",
+                  "leftColumn": "BILL_SEQUENCE_ID",
+                  "rightColumn": "BILL_SEQUENCE_ID"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "notes": "POPULATED 2026-09-07 (UIFPE-269) from the registered bom_* Silver sources; the 2026-08-17 contract-first empty array is gone. Carries its own query (derivation.sql, ADR-0008) because it joins four tables (bill header → structure type → components → component item's SEGMENT1 via items_all, plus the UDA rows). Bills are read from the MASTER org only (99.99% of the 345,597 bills in dev; 46 sit on nine other orgs) and primary structures only (ALTERNATE_BOM_DESIGNATOR IS NULL), so one item's components are one list for every org row. Structure type by NAME ('PEARSON_CUSTOM'); UDA group by id (1185) because EGO_ATTR_GROUPS_V is not in Silver. Change detection: the bill header carries ASSEMBLY_ITEM_ID (keyed source bom_bills); components / UDA rows / structure types are lookup_only, so a component-only edit lands via the daily schedule.refresh on this column (pipeline config, the price precedent). Sorted by ppid then effectiveDate (the UDA D_EXT_ATTR1) — no sequence column.",
+      "derivation": {
+        "sql": "WITH master_org AS (\n  SELECT min(CAST(ORGANIZATION_ID AS BIGINT)) AS oid\n  FROM org_params\n  WHERE CAST(ORGANIZATION_ID AS BIGINT) = CAST(MASTER_ORGANIZATION_ID AS BIGINT)\n),\nbom_struct AS (\n  SELECT CAST(STRUCTURE_TYPE_ID AS BIGINT) AS stid,\n         max(STRUCTURE_TYPE_NAME)          AS structureTypeName\n  FROM bom_structure_types GROUP BY 1\n),\nbom_hdr AS (\n  SELECT CAST(b.ASSEMBLY_ITEM_ID AS BIGINT)  AS iid,\n         CAST(COALESCE(b.COMMON_BILL_SEQUENCE_ID, b.BILL_SEQUENCE_ID) AS BIGINT) AS bsid,\n         s.structureTypeName                 AS structureTypeName\n  FROM bom_bills b\n  JOIN bom_struct s ON CAST(b.STRUCTURE_TYPE_ID AS BIGINT) = s.stid\n  JOIN master_org m ON CAST(b.ORGANIZATION_ID AS BIGINT) = m.oid\n  WHERE s.structureTypeName IN ('Pearson Standard', 'PEARSON_CUSTOM')\n    AND b.ALTERNATE_BOM_DESIGNATOR IS NULL\n),\ncomp_items AS (\n  SELECT CAST(INVENTORY_ITEM_ID AS BIGINT) AS iid, max(SEGMENT1) AS componentProductId\n  FROM items_all GROUP BY 1\n),\nbom_comp AS (\n  SELECT h.iid, h.structureTypeName, h.bsid,\n         CAST(c.COMPONENT_SEQUENCE_ID AS BIGINT) AS csid,\n         ci.componentProductId                                 AS componentProductId,\n         CAST(c.ITEM_NUM AS INT)                 AS sequenceNumber,\n         CAST(c.COMPONENT_QUANTITY AS DECIMAL(38,2)) AS componentQuantity,\n         CAST(c.EFFECTIVITY_DATE AS DATE)        AS componentEffectiveDate,\n         CAST(c.DISABLE_DATE AS DATE)            AS componentDisabledDate\n  FROM bom_hdr h\n  JOIN bom_components c ON CAST(c.BILL_SEQUENCE_ID AS BIGINT) = h.bsid\n  JOIN comp_items ci   ON CAST(c.COMPONENT_ITEM_ID AS BIGINT) = ci.iid\n),\nbom_uda_std AS (\n  SELECT CAST(BILL_SEQUENCE_ID AS BIGINT)      AS bsid,\n         CAST(COMPONENT_SEQUENCE_ID AS BIGINT) AS csid,\n         max(CAST(N_EXT_ATTR1 AS INT))         AS componentFinalPageCount,\n         max(C_EXT_ATTR1)                      AS discountType,\n         max(CAST(N_EXT_ATTR3 AS DECIMAL(38,2))) AS discountAmount\n  FROM bom_components_ext WHERE ATTR_GROUP_ID = 1184 GROUP BY 1, 2\n),\nbom_uda_cust AS (\n  SELECT CAST(BILL_SEQUENCE_ID AS BIGINT)      AS bsid,\n         CAST(COMPONENT_SEQUENCE_ID AS BIGINT) AS csid,\n         max(CAST(N_EXT_ATTR1 AS DECIMAL(38,2))) AS originalWorkPercent,\n         max(CAST(N_EXT_ATTR2 AS DECIMAL(38,2))) AS customWorkPercent,\n         CAST(max(D_EXT_ATTR1) AS DATE)        AS componentEffectiveDate,\n         max(CAST(N_EXT_ATTR3 AS INT))         AS componentFinalPageCount,\n         max(CAST(N_EXT_ATTR4 AS DECIMAL(38,2))) AS overridePercent\n  FROM bom_components_ext WHERE ATTR_GROUP_ID = 1185 GROUP BY 1, 2\n)\nSELECT c.iid,\n       transform(\n         array_sort(collect_list(named_struct(\n           's1', c.componentProductId,\n           's2', u.componentEffectiveDate,\n           'p', named_struct(\n             'componentProductId',                c.componentProductId,\n             'originalWorkPercent', u.originalWorkPercent,\n             'customWorkPercent',   u.customWorkPercent,\n             'componentEffectiveDate',       u.componentEffectiveDate,\n             'componentFinalPageCount',      u.componentFinalPageCount,\n             'overridePercent',  u.overridePercent,\n             'componentDisabledDate',        c.componentDisabledDate\n           )))),\n         x -> x.p) AS customComponents\nFROM bom_comp c\nLEFT JOIN bom_uda_cust u ON u.bsid = c.bsid AND u.csid = c.csid\nWHERE c.structureTypeName = 'PEARSON_CUSTOM'\nGROUP BY 1",
+        "keyedBy": [
+          {
+            "queryColumn": "iid",
+            "entityColumn": "INVENTORY_ITEM_ID"
+          }
+        ],
+        "valueColumn": "customComponents",
+        "reads": {
+          "bom_bills": [
+            "ALTERNATE_BOM_DESIGNATOR",
+            "ASSEMBLY_ITEM_ID",
+            "BILL_SEQUENCE_ID",
+            "COMMON_BILL_SEQUENCE_ID",
+            "ORGANIZATION_ID",
+            "STRUCTURE_TYPE_ID"
+          ],
+          "bom_components": [
+            "BILL_SEQUENCE_ID",
+            "COMPONENT_ITEM_ID",
+            "COMPONENT_QUANTITY",
+            "COMPONENT_SEQUENCE_ID",
+            "DISABLE_DATE",
+            "EFFECTIVITY_DATE",
+            "ITEM_NUM"
+          ],
+          "bom_components_ext": [
+            "ATTR_GROUP_ID",
+            "BILL_SEQUENCE_ID",
+            "COMPONENT_SEQUENCE_ID",
+            "C_EXT_ATTR1",
+            "D_EXT_ATTR1",
+            "N_EXT_ATTR1",
+            "N_EXT_ATTR2",
+            "N_EXT_ATTR3",
+            "N_EXT_ATTR4"
+          ],
+          "bom_structure_types": [
+            "STRUCTURE_TYPE_ID",
+            "STRUCTURE_TYPE_NAME"
+          ],
+          "items_all": [
+            "INVENTORY_ITEM_ID",
+            "SEGMENT1"
+          ],
+          "org_params": [
+            "MASTER_ORGANIZATION_ID",
+            "ORGANIZATION_ID"
+          ]
+        }
+      }
+    },
+    {
+      "goldColumnName": "categories",
+      "businessDescription": "Category assignments from the in-scope category sets (EPT, POA, Private Pay (POA)), with the full parent-to-mapped hierarchy path; EPT is a global catalog taxonomy auto-populated from Discipline (Levels 1-4).",
+      "kind": "nested",
+      "joinKey": "INVENTORY_ITEM_ID -> item, assignment read from the master org only (fans out to all orgs)",
+      "filter": "MTL_CATEGORY_SETS.CATEGORY_SET_NAME IN ('EPT','POA','Private Pay (POA)') AND MTL_ITEM_CATEGORIES.ORGANIZATION_ID = MTL_PARAMETERS.MASTER_ORGANIZATION_ID",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "categorySetName",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "MTL_CATEGORY_SETS",
+            "column": "CATEGORY_SET_NAME",
+            "filter": "CATEGORY_SET_NAME IN ('EPT','POA','Private Pay (POA)')",
+            "join": {
+              "type": "inner",
+              "on": [
+                {
+                  "leftTable": "MTL_ITEM_CATEGORIES",
+                  "leftColumn": "CATEGORY_SET_ID",
+                  "rightColumn": "CATEGORY_SET_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "categoryCode",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "MTL_CATEGORIES_B",
+            "column": "SEGMENT1",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_ITEM_CATEGORIES",
+                  "leftColumn": "CATEGORY_ID",
+                  "rightColumn": "CATEGORY_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "categoryName",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "MTL_CATEGORIES_TL",
+            "column": "DESCRIPTION",
+            "filter": "LANGUAGE = 'US'",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_ITEM_CATEGORIES",
+                  "leftColumn": "CATEGORY_ID",
+                  "rightColumn": "CATEGORY_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "categoryHierarchyPath",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "MTL_CATEGORY_SET_VALID_CATS",
+            "column": "PARENT_CATEGORY_ID",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_ITEM_CATEGORIES",
+                  "leftColumn": "CATEGORY_SET_ID",
+                  "rightColumn": "CATEGORY_SET_ID"
+                },
+                {
+                  "leftTable": "MTL_ITEM_CATEGORIES",
+                  "leftColumn": "CATEGORY_ID",
+                  "rightColumn": "CATEGORY_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "categoryId",
+          "type": "integer",
+          "sortKey": false,
+          "source": {
+            "table": "MTL_ITEM_CATEGORIES",
+            "column": "CATEGORY_ID",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ecatalogIncludeIndicator",
+          "type": "boolean",
+          "sortKey": false,
+          "source": {
+            "table": "MTL_CATEGORIES_B",
+            "column": "ATTRIBUTE8",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_ITEM_CATEGORIES",
+                  "leftColumn": "CATEGORY_ID",
+                  "rightColumn": "CATEGORY_ID"
+                }
+              ]
+            }
+          },
+          "transform": {
+            "rule": "yesNoToIndicator"
+          }
+        },
+        {
+          "name": "categoryDisabledDate",
+          "type": "date",
+          "sortKey": false,
+          "source": {
+            "table": "MTL_CATEGORIES_B",
+            "column": "DISABLE_DATE",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_ITEM_CATEGORIES",
+                  "leftColumn": "CATEGORY_ID",
+                  "rightColumn": "CATEGORY_ID"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "derivation": {
+        "sql": "WITH cat_set_scope AS (\n  SELECT CAST(CATEGORY_SET_ID AS BIGINT) AS sid,\n         max(CATEGORY_SET_NAME) AS categorySetName\n  FROM category_sets\n  WHERE CATEGORY_SET_NAME IN ('EPT', 'POA', 'Private Pay (POA)')\n  GROUP BY 1\n),\nmaster_org AS (\n  SELECT min(CAST(ORGANIZATION_ID AS BIGINT)) AS oid\n  FROM org_params\n  WHERE CAST(ORGANIZATION_ID AS BIGINT) = CAST(MASTER_ORGANIZATION_ID AS BIGINT)\n),\ncat_tl AS (\n  SELECT CAST(CATEGORY_ID AS BIGINT) AS cid,\n         max(DESCRIPTION) AS categoryName\n  FROM categories_tl WHERE LANGUAGE = 'US' GROUP BY 1\n),\ncat_label AS (\n  SELECT CAST(c.CATEGORY_ID AS BIGINT) AS cid,\n         max(c.SEGMENT1) AS categoryCode,\n         max(t.categoryName) AS categoryName,\n         max(c.ATTRIBUTE8) AS ecatalogIncludeIndicator,\n         CAST(max(c.DISABLE_DATE) AS DATE) AS categoryDisabledDate\n  FROM categories_b c\n  LEFT JOIN cat_tl t ON CAST(c.CATEGORY_ID AS BIGINT) = t.cid\n  GROUP BY 1\n),\ncat_edge AS (\n  SELECT CAST(CATEGORY_SET_ID AS BIGINT) AS sid,\n         CAST(CATEGORY_ID AS BIGINT) AS cid,\n         max(CAST(PARENT_CATEGORY_ID AS BIGINT)) AS pid\n  FROM category_valid_cats GROUP BY 1, 2\n),\ncat_hier AS (\n  SELECT e0.sid,\n         e0.cid,\n         nullif(concat_ws(' > ',\n                  l5.categoryName, l4.categoryName, l3.categoryName,\n                  l2.categoryName, l1.categoryName, l0.categoryName), '') AS categoryHierarchyPath\n  FROM cat_edge e0\n  LEFT JOIN cat_edge e1 ON e1.sid = e0.sid AND e1.cid = e0.pid\n  LEFT JOIN cat_edge e2 ON e2.sid = e1.sid AND e2.cid = e1.pid\n  LEFT JOIN cat_edge e3 ON e3.sid = e2.sid AND e3.cid = e2.pid\n  LEFT JOIN cat_edge e4 ON e4.sid = e3.sid AND e4.cid = e3.pid\n  LEFT JOIN cat_edge e5 ON e5.sid = e4.sid AND e5.cid = e4.pid\n  LEFT JOIN cat_label l0 ON l0.cid = e0.cid\n  LEFT JOIN cat_label l1 ON l1.cid = e1.cid\n  LEFT JOIN cat_label l2 ON l2.cid = e2.cid\n  LEFT JOIN cat_label l3 ON l3.cid = e3.cid\n  LEFT JOIN cat_label l4 ON l4.cid = e4.cid\n  LEFT JOIN cat_label l5 ON l5.cid = e5.cid\n)\nSELECT ic.iid,\n       transform(\n         array_sort(collect_list(named_struct(\n           's1', ic.categorySetName,\n           's2', ic.cid,\n           'p', named_struct(\n             'categorySetName',     ic.categorySetName,\n             'categoryCode',        ic.categoryCode,\n             'categoryName',        ic.categoryName,\n             'categoryHierarchyPath',           ic.categoryHierarchyPath,\n             'categoryId',          ic.cid,\n             'ecatalogIncludeIndicator', CAST(ic.ecatalogIncludeIndicator AS BOOLEAN),\n             'categoryDisabledDate',         ic.categoryDisabledDate\n           )))),\n         x -> x.p) AS categories\nFROM (\n  SELECT DISTINCT\n         CAST(a.INVENTORY_ITEM_ID AS BIGINT) AS iid,\n         s.categorySetName AS categorySetName,\n         CAST(a.CATEGORY_ID AS BIGINT) AS cid,\n         l.categoryCode AS categoryCode,\n         l.categoryName AS categoryName,\n         h.categoryHierarchyPath AS categoryHierarchyPath,\n         l.ecatalogIncludeIndicator AS ecatalogIncludeIndicator,\n         l.categoryDisabledDate AS categoryDisabledDate\n  FROM item_categories a\n  JOIN cat_set_scope s ON CAST(a.CATEGORY_SET_ID AS BIGINT) = s.sid\n  JOIN master_org m ON CAST(a.ORGANIZATION_ID AS BIGINT) = m.oid\n  LEFT JOIN cat_label l ON CAST(a.CATEGORY_ID AS BIGINT) = l.cid\n  LEFT JOIN cat_hier h ON CAST(a.CATEGORY_SET_ID AS BIGINT) = h.sid\n                      AND CAST(a.CATEGORY_ID AS BIGINT) = h.cid\n) ic\nGROUP BY 1",
+        "keyedBy": [
+          {
+            "queryColumn": "iid",
+            "entityColumn": "INVENTORY_ITEM_ID"
+          }
+        ],
+        "valueColumn": "categories",
+        "reads": {
+          "categories_b": [
+            "ATTRIBUTE8",
+            "CATEGORY_ID",
+            "DISABLE_DATE",
+            "SEGMENT1"
+          ],
+          "categories_tl": [
+            "CATEGORY_ID",
+            "DESCRIPTION",
+            "LANGUAGE"
+          ],
+          "category_sets": [
+            "CATEGORY_SET_ID",
+            "CATEGORY_SET_NAME"
+          ],
+          "category_valid_cats": [
+            "CATEGORY_ID",
+            "CATEGORY_SET_ID",
+            "PARENT_CATEGORY_ID"
+          ],
+          "item_categories": [
+            "CATEGORY_ID",
+            "CATEGORY_SET_ID",
+            "INVENTORY_ITEM_ID",
+            "ORGANIZATION_ID"
+          ],
+          "org_params": [
+            "MASTER_ORGANIZATION_ID",
+            "ORGANIZATION_ID"
+          ]
+        }
+      },
+      "notes": "Added 2026-08-31 (UIFPE-232). Carries its own query (derivation.sql, ADR-0008: the query is the contract) because the column joins five tables and DERIVES hierarchy rather than reading it: the PARENT_CATEGORY_ID chain is walked from the mapped category up to the root and rendered root-first, ' > '-joined (e.g. 'Engineering > Mechanics > Aerodynamics'). SEPARATOR IS ' > ', NOT the slash the business writes: 106 of 2,944 in-scope categories (3.6%) carry a '/' inside their own label ('DC / AC Circuits', 'CAD / CAM / CIM'), so a slash separator renders paths that lie about their depth and cannot be split reliably. '>' is absent from all 132,048 US category labels in the catalog. The walk is a FIXED six-level chain because Spark has no recursive CTE; concat_ws skips nulls so one expression serves every depth. Depth MEASURED in dev 2026-08-31: max 3, zero categories at depth 4-7, so three levels of headroom — re-check if a set is added to scope, because a deeper chain loses its TOP levels quietly. Assignments are read from the master org (ORGANIZATION_ID = MASTER_ORGANIZATION_ID) and fan out to every org row, so key_mapping binds inventoryItemId ONLY. The manifest's array_sort_keys carries the full sort tuple (categorySetName, categoryId); this entry marks the primary field only, as marketingCopy does. Scope is pinned by set NAME in the mapping SQL and asserted by a test: EPT, POA and Private Pay (POA) are the business-confirmed scope for this flow (2026-08-31). Widening it is a one-line edit reviewed in a PR. The four taxonomy dimensions are lookup_only, so a category RELABEL (including isIncludeInECatalog / disableDate) is a refresh-columns candidate, not change-detected."
+    },
+    {
+      "goldColumnName": "enablingTechnology",
+      "businessDescription": "Multi-row, 2-level attribute identifying which Pearson or third-party technologies underpin the item; these can include mobile, content and interactive capabilities. Held as (level 1, level 2) pairs.",
+      "kind": "nested",
+      "joinKey": "INVENTORY_ITEM_ID → item (fans out to all orgs)",
+      "filter": "ATTR_GROUP_ID = 881 (ELSE) / 1407 (10002 Digital Catalog) — conditional by ITEM_CATALOG_GROUP_ID; rows kept when (C_EXT_ATTR1 IS NOT NULL OR C_EXT_ATTR2 IS NOT NULL)",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "enablingTechnologyLevel1",
+          "type": "string",
+          "sortKey": true,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "enablingTechnologyLevel2",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2"
+          }
+        }
+      ],
+      "notes": "Added 2026-09-07 (UIFPE-270). Conditional NESTED column: the legacy group is 881 PSON_ENABLING_TECHNOLOGY (366k rows / 354k items, up to 6 per item), the digital group 1407 PSON_PRODUCT_CAPABILITIES (15k rows / 4.9k items, avg 3, up to 11) — each SQL CTE filters both group and catalog side so the COALESCE is a strict branch pick like every other conditional. Sorted by (level1, level2), duplicates collapsed (collect_set). Rows whose both values are NULL after the null-sentinel rule (243k 'N/A / N/A' and 'TBD / TBD' rows in dev) are dropped by the declared filter."
+    },
+    {
+      "goldColumnName": "productUrl",
+      "businessDescription": "Link that directs customers to a product's purchase or registration page; for some product lines it must be enriched to enable purchase capabilities on Pearson's and external websites.",
+      "kind": "conditional",
+      "dataType": "string",
+      "discriminator": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_TL",
+        "column": "ITEM_CATALOG_GROUP_ID"
+      },
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "branches": [
+        {
+          "condition": "ELSE (<> 10002)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_TL",
+            "column": "TL_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1165 AND LANGUAGE = 'US'",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        },
+        {
+          "condition": "10002 (Digital Catalog)",
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_TL",
+            "column": "TL_EXT_ATTR1",
+            "filter": "ATTR_GROUP_ID = 1406 AND LANGUAGE = 'US'",
+            "join": {
+              "type": "left",
+              "on": [
+                {
+                  "leftTable": "MTL_SYSTEM_ITEMS_B",
+                  "leftColumn": "INVENTORY_ITEM_ID",
+                  "rightColumn": "INVENTORY_ITEM_ID"
+                }
+              ]
+            }
+          },
+          "fallback": "returnNull",
+          "notes": null
+        }
+      ],
+      "notes": "Added 2026-09-07 (UIFPE-270). PRODUCT_URL is a TL_EXT_ATTR slot, which lives in the TRANSLATIONS table EGO_MTL_SY_ITEMS_EXT_TL (US and FRC rows; US only, like longDescription) — a new manifest source, items_ext_tl. Legacy group 1165 PSON_PRODUCT_WEB_DETAILS (1.51M items in dev), digital 1406 PSON_PROD_WEB_DTLS_DGTL."
+    },
+    {
+      "goldColumnName": "fulfillmentOrgDetails.readyForManufactureCode",
+      "businessDescription": "Ready for Manufacture: the fulfillment organization's manufacturing-readiness status for the item (for example IF Ready to Print, HELD_QUALITY, NO_COMP, NO_PACK).",
+      "kind": "scalar",
+      "dataType": "string",
+      "source": {
+        "table": "EGO_MTL_SY_ITEMS_EXT_B",
+        "column": "C_EXT_ATTR1",
+        "filter": "ATTR_GROUP_ID = 1174",
+        "join": {
+          "type": "left",
+          "on": [
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "INVENTORY_ITEM_ID",
+              "rightColumn": "INVENTORY_ITEM_ID"
+            },
+            {
+              "leftTable": "MTL_SYSTEM_ITEMS_B",
+              "leftColumn": "ORGANIZATION_ID",
+              "rightColumn": "ORGANIZATION_ID"
+            }
+          ]
+        }
+      },
+      "transform": null,
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "nullable": true,
+      "notes": null
+    },
+    {
+      "goldColumnName": "instructorResourceFiles",
+      "businessDescription": "Instructor Resource Content files for this product — the downloadable assets supplied to instructors, each with its name, location and media status. One-to-many per product, ordered by the rank MDM assigns.",
+      "kind": "nested",
+      "joinKey": "INVENTORY_ITEM_ID → item (fans out to all orgs); base and translations rows joined on EXTENSION_ID",
+      "filter": "ATTR_GROUP_ID = 754 (both tables) AND LANGUAGE = 'US' (translations)",
+      "channels": {
+        "event": true,
+        "message": true,
+        "api": true
+      },
+      "fields": [
+        {
+          "name": "fileName",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "fileExtensionCode",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR2"
+          }
+        },
+        {
+          "name": "fileSize",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR3"
+          }
+        },
+        {
+          "name": "linkText",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR4"
+          }
+        },
+        {
+          "name": "fileUrl",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR5"
+          }
+        },
+        {
+          "name": "mediaFileType",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR6"
+          }
+        },
+        {
+          "name": "mediaStatus",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "C_EXT_ATTR7"
+          }
+        },
+        {
+          "name": "fileRankSequence",
+          "type": "integer",
+          "sortKey": true,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_B",
+            "column": "N_EXT_ATTR1"
+          }
+        },
+        {
+          "name": "fileDescription",
+          "type": "string",
+          "sortKey": false,
+          "source": {
+            "table": "EGO_MTL_SY_ITEMS_EXT_TL",
+            "column": "TL_EXT_ATTR1"
+          }
+        }
+      ],
+      "derivation": {
+        "sql": "WITH irc754 AS (\n  SELECT CAST(items_ext.INVENTORY_ITEM_ID AS BIGINT) AS iid,\n         transform(\n           array_sort(collect_list(named_struct(\n             's1', CAST(items_ext.N_EXT_ATTR1 AS INT),\n             's2', items_ext.C_EXT_ATTR1,\n             'p', named_struct(\n               'fileName',          items_ext.C_EXT_ATTR1,\n               'fileExtensionCode', items_ext.C_EXT_ATTR2,\n               'fileSize',          items_ext.C_EXT_ATTR3,\n               'linkText',          items_ext.C_EXT_ATTR4,\n               'fileUrl',           items_ext.C_EXT_ATTR5,\n               'mediaFileType',     items_ext.C_EXT_ATTR6,\n               'mediaStatus',       items_ext.C_EXT_ATTR7,\n               'fileRankSequence',  CAST(items_ext.N_EXT_ATTR1 AS INT),\n               'fileDescription',   items_ext_tl.TL_EXT_ATTR1)))),\n           x -> x.p) AS instructorResourceFiles\n  FROM items_ext\n  LEFT JOIN items_ext_tl\n         ON CAST(items_ext.EXTENSION_ID AS BIGINT)\n          = CAST(items_ext_tl.EXTENSION_ID AS BIGINT)\n        AND items_ext_tl.ATTR_GROUP_ID = 754\n        AND items_ext_tl.LANGUAGE = 'US'\n  WHERE items_ext.ATTR_GROUP_ID = 754\n  GROUP BY 1\n)\nSELECT iid, instructorResourceFiles FROM irc754",
+        "keyedBy": [
+          {
+            "queryColumn": "iid",
+            "entityColumn": "INVENTORY_ITEM_ID"
+          }
+        ],
+        "valueColumn": "instructorResourceFiles",
+        "reads": {
+          "items_ext": [
+            "ATTR_GROUP_ID",
+            "C_EXT_ATTR1",
+            "C_EXT_ATTR2",
+            "C_EXT_ATTR3",
+            "C_EXT_ATTR4",
+            "C_EXT_ATTR5",
+            "C_EXT_ATTR6",
+            "C_EXT_ATTR7",
+            "EXTENSION_ID",
+            "INVENTORY_ITEM_ID",
+            "N_EXT_ATTR1"
+          ],
+          "items_ext_tl": [
+            "ATTR_GROUP_ID",
+            "EXTENSION_ID",
+            "LANGUAGE",
+            "TL_EXT_ATTR1"
+          ]
+        }
+      }
+    }
+  ]
+}

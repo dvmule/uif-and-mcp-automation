@@ -1,0 +1,76 @@
+# Local Apicurio Registry + Postgres, for BFF and UI development.
+#
+# Mirrors the env keys the deployed task sets in
+# infrastructure/terraform/ecs.tf, so local behaviour matches dev rather than
+# being a separate toy configuration.
+#
+# Two Pearson-specific gotchas, both hit while first standing this up:
+#
+#  1. The image comes from QUAY, not Docker Hub. Pearson's Docker Hub org
+#     policy rejects the image outright:
+#       denied: image access restricted: apicurio/apicurio-registry
+#       blocked for organization pearson
+#     quay.io is Apicurio's other official registry and is unaffected. An ECR
+#     mirror is tracked as UIFPE-309.
+#
+#  2. Docker Desktop on a Pearson-managed Mac enforces sign-in to the
+#     [pearson] organization via registry.json. If any docker command returns
+#     "Sign in to continue using Docker Desktop", sign in through the Docker
+#     Desktop window first — the CLI cannot do it for you.
+#
+# Health lives on the MANAGEMENT port 9000 at /health/ready. Not
+# /q/health/ready, and not on 8080 at all: every path under /q/ returns 404 on
+# both ports in 3.3.2. The healthcheck below is the same command ecs.tf uses.
+#
+# Usage:
+#   docker compose up -d
+#   curl localhost:8080/apis/registry/v3/system/info
+#   docker compose down -v          # -v also drops the Postgres volume
+#
+# Then the BFF (defaults already point at localhost:8080):
+#   cd src && uv sync --extra dev && ./.venv/bin/python -m uvicorn app.main:app --port 8000
+# and the UI (ui/public/config.json carries the localhost:8000 default):
+#   cd ui && npm run dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: apicurio
+      POSTGRES_USER: apicurio
+      # Local only. The deployed stack injects this from Secrets Manager as an
+      # ECS task secret — see infrastructure/terraform/ecs.tf.
+      POSTGRES_PASSWORD: localdev
+    volumes:
+      - apicurio-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apicurio -d apicurio"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  registry:
+    image: quay.io/apicurio/apicurio-registry:3.3.2
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Same four keys as the ECS task definition.
+      APICURIO_STORAGE_KIND: sql
+      APICURIO_STORAGE_SQL_KIND: postgresql
+      APICURIO_DATASOURCE_URL: jdbc:postgresql://db:5432/apicurio
+      APICURIO_DATASOURCE_USERNAME: apicurio
+      APICURIO_DATASOURCE_PASSWORD: localdev
+    ports:
+      - "8080:8080"  # registry API — /apis/registry/v3
+      - "9000:9000"  # management — /health/ready, /metrics
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # First boot runs the SQL schema init; ~90s observed on an M-series Mac.
+      start_period: 30s
+
+volumes:
+  apicurio-pgdata:

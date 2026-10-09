@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.pearson.com/gold/product/v1/master.json",
+  "title": "Product",
+  "description": "Gold entity: Product. Materialized from Oracle EBS Inventory (MTL_SYSTEM_ITEMS_B joined to EGO_MTL_SY_ITEMS_EXT_B for ISBN attrs). 1 row per (inventory_item_id, org_id). x-channels declares which downstream tier(s) consume each attribute: event ⊂ message ⊂ api.",
+  "metadata": {
+    "owner": {
+      "service": "urn:pearson:service:product:catalog-svc",
+      "team":    "Enterprise Data Connect",
+      "contact": "raj.karunakaran@pearson.com"
+    },
+    "domain":             "product",
+    "dataClassification": "internal",
+    "audience":           "engineering",
+    "lifecycle":          "active"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "inventory_item_id",
+    "product_id",
+    "org_id"
+  ],
+  "properties": {
+    "inventory_item_id": {
+      "type": "integer",
+      "description": "EBS internal surrogate. Maps to MTL_SYSTEM_ITEMS_B.INVENTORY_ITEM_ID. Part of the natural key.",
+      "x-channels": ["api"]
+    },
+    "product_id": {
+      "type": "string",
+      "description": "Human-readable item number. Maps to MTL_SYSTEM_ITEMS_B.SEGMENT1.",
+      "x-channels": ["event", "message", "api"]
+    },
+    "org_id": {
+      "type": "integer",
+      "description": "Organization identifier. Maps to MTL_SYSTEM_ITEMS_B.ORGANIZATION_ID. Part of the natural key.",
+      "x-channels": ["event", "message", "api"]
+    },
+    "isbn10": {
+      "type": ["string", "null"],
+      "description": "ISBN-10. Maps to EGO_MTL_SY_ITEMS_EXT_B.C_EXT_ATTR6 where ATTR_GROUP_ID = 741.",
+      "x-channels": ["event", "message", "api"]
+    },
+    "isbn13": {
+      "type": ["string", "null"],
+      "description": "ISBN-13. Maps to EGO_MTL_SY_ITEMS_EXT_B.C_EXT_ATTR8 where ATTR_GROUP_ID = 741.",
+      "x-channels": ["event", "message", "api"]
+    }
+  }
+}

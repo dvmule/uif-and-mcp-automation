@@ -1,0 +1,298 @@
+# Program retrieval API (UIFPE-521) — the registered contract for the gold
+# program entity, following the pattern stock piloted in UIFPE-518 and price
+# followed in UIFPE-520.
+#
+# Contract-first per capabilities/api/guidelines.md. The response schema is
+# NOT restated here: it $refs ../../schemas/channels/program/program-data-api-created.json, the generated
+# api-tier projection of domains/program/src/schemas/gold/program/v1/master.json.
+# A hand-authored copy of a generated schema is a restatement, and the two
+# drift silently (UIFPE-524).
+#
+# THE PATH KEY IS NOT THE GOLD KEY, and this is the only entity where that is
+# true. The gold table merges on (inventoryItemId, organizationId) because
+# only the driving Silver table carries SEGMENT1 — which IS programId — so
+# four of program's six sources cannot express it, and the CDC layer refuses a
+# primary key a source cannot project. The business key is programId alone.
+# UIFPE-521 split the two: the merge key stays for CDC, and the serving copy
+# carries a secondary index so this path resolves by programId.
+#
+# WHAT THAT COSTS, stated because it is the one thing a reader should know.
+# A secondary index does not enforce uniqueness the way a merge key does, so
+# "one row per programId" is MEASURED rather than guaranteed by storage:
+# 14,628 rows, 14,628 distinct programId, zero nulls, one organization
+# (dev, 2026-09-29). The API reads two rows and returns 500 if a second
+# exists, rather than serving one of two answers — and that refusal raises the
+# gold-serving-api-entity-key-not-unique alarm. A DQ check that catches a
+# duplicate BEFORE a consumer hits it is the durable guard and is not built
+# yet; the alarm is what exists today.
+#
+# THERE IS NO ORGANIZATION ON THIS SURFACE, and that is not an omission.
+# Measured: every P2 item in Silver lives at organization 82, whose code is
+# MDM — 14,628 of 14,628. So the pipeline's `ORGANIZATION_ID = 82` filter is
+# "MDM only" by construction rather than a narrowing, and an organization path
+# segment would carry a single constant value. inventoryItemId and
+# organizationId both carry `x-channels: []`: stored, served on no channel,
+# and absent from every response here.
+openapi: 3.1.0
+info:
+  title: Program API
+  version: 1.0.0
+  description: >
+    Returns one programme: its descriptions, catalogue placement, cover image,
+    the products it contains, and its related programmes. Responses are
+    cacheable — honour ETag and Cache-Control.
+  contact:
+    name: Enterprise Data Connect
+    email: reyasahamed.habibrahman@pearson.com
+x-registry:
+  group: program
+  artifact: program-api
+  compatibility: BACKWARD
+# The service level OBJECTIVE, which capabilities/api/guidelines.md requires
+# before shipping. The SAME figures stock and price publish, deliberately: one
+# Lambda serves every gold entity, so the latency alarms are on the function
+# rather than per entity and there is one set of numbers to keep true.
+#
+# Backend only. The Mule gateway adds its own share, unmeasured because it does
+# not exist yet, so a consumer-facing SLA must add to these rather than quote
+# them.
+x-slo:
+  latencyP50Milliseconds: 20
+  latencyP99Milliseconds: 1300
+  availabilityPercent: 99.9
+  freshnessHours: 36
+  notes:
+    latency: >
+      Inherited from the shared retrieval function, measured on dev 2026-09-28
+      at warm p50 5.2 ms and warm p99 12.4 ms. The p99 budget admits a Lambda
+      cold start, measured at 1,091 ms typical and 1,211 ms worst; cold starts
+      are accepted rather than removed with provisioned concurrency (owner
+      decision 2026-09-28). Program reads additionally go through a secondary
+      index rather than a point GetItem, which is one Query instead of one
+      GetItem and has NOT been separately measured — treat the figures above as
+      the function's, and re-measure if program's reads ever miss them.
+    availability: >
+      Single region, no failover. Enforced by the shared retrieval function's
+      Errors and Throttles alarms. A secondary index read is eventually
+      consistent by design — DynamoDB offers no strongly consistent read on a
+      global index — which is immaterial for a copy materialised daily from a
+      gold table, and is stated so nobody assumes otherwise.
+    freshness: >
+      36 hours, 1.5x the daily pipeline cadence (program transforms at 07:15
+      UTC) and the figure the per-entity FreshnessBreached alarm fires on.
+# Measured over all 14,642 gold rows on dev, 2026-09-29. The row count settles
+# at 14,628 once reconcile removes 14 rows whose source items were deleted
+# upstream (UIFPE-687); the proportions below are unaffected.
+x-field-availability:
+  alwaysPresent:
+    fields: [programId, description, longDescription, inventoryItemStatus]
+    populatedRows: 14642
+  sparse:
+    coverImageLargeUrl:
+      populatedRows: 11542
+      why: >
+        78.8%. Roughly one programme in five has no cover image in the DAM
+        asset space, so a consumer rendering a tile needs a placeholder path.
+        This is the sparsest field on the surface and the one most likely to be
+        assumed always-present.
+    relevanceValue:
+      populatedRows: 14293
+      why: 97.6%.
+    programOwnerName:
+      populatedRows: 14102
+      why: 96.3%.
+    programFamilyCatalogCode:
+      populatedRows: 13957
+      why: 95.3%.
+    parentProductId:
+      populatedRows: 13759
+      why: >
+        94.0%. Absent where the programme has no parent product, which is a
+        real state rather than missing data.
+  arrays:
+    # Neither array is ever null in gold — the mapping SQL coalesces to an
+    # empty array, and that is a standing hash-stability commitment. The master
+    # still declares both as ["array", "null"], which is looser than the data;
+    # tightening it is UIFPE-436's scope, not this contract's.
+    associatedProducts:
+      nullRows: 0
+      emptyRows: 124
+      maxElements: 109
+      why: >
+        Almost always populated. 124 programmes contain no products.
+    relatedPrograms:
+      nullRows: 0
+      emptyRows: 10860
+      maxElements: 4
+      why: >
+        EMPTY IS THE NORMAL CASE — 74.2% of programmes have no related
+        programme. Do not treat an empty array as an error or a lookup miss.
+        At most four elements, so there is nothing to paginate.
+# Recorded rather than fixed, so a reviewer does not have to re-derive it.
+x-standards-exceptions:
+  namingN2:
+    elements: [description, relevanceValue, coverImageLargeUrl,
+               associatedProducts, relatedPrograms]
+    why: >
+      Five element names fail Schema Rule N2 (prime word plus class word).
+      `description` is a class word with no prime word; `relevanceValue` and
+      the two plurals carry no class word; `coverImageLargeUrl` ends in `Url`
+      where the vocabulary registers `Uri`. All five are pre-existing master
+      names already live on the event and message channels and already physical
+      columns in the gold table, so renaming any of them is a breaking change
+      across three surfaces plus a column migration. Deferred with product's 24
+      and price's 1 — this is one owner decision, not five.
+  namingN5:
+    elements: [programId, parentProductId, relatedProgramId]
+    why: >
+      No `*IdType` alongside each identifier. Same deferred decision as the
+      other gold entities.
+  requiredN12:
+    why: >
+      The generated projection marks only programId required. N12 wants every
+      element required with null permitted through the type union, so a cleared
+      value is communicated rather than omitted. That is UIFPE-436, which
+      covers all four gold entities at once.
+tags:
+  - name: program
+    description: Gold programme entity by programme identifier.
+servers:
+  - url: https://api1-dev.pearson.com/uif/v1
+    description: dev (Mule gateway)
+  - url: https://api1-stg.pearson.com/uif/v1
+    description: uat (Mule gateway)
+  - url: https://api1-us1.pearson.com/uif/v1
+    description: prod (Mule gateway)
+security:
+  - EntraID: []
+paths:
+  /program/{programId}:
+    get:
+      operationId: getProgram
+      tags: [program]
+      summary: One programme
+      description: >
+        The canonical single read, and the only one. The path segment is
+        singular because it resolves to exactly one programme; there is no
+        sub-resource, because the organization half of the gold merge key is a
+        storage concern that carries one value for every row on this surface.
+      parameters:
+        - $ref: "#/components/parameters/ProgramId"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: >
+            The programme. associatedProducts and relatedPrograms are arrays —
+            never null — and an empty relatedPrograms is the normal case rather
+            than a miss, for 74.2% of programmes.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            Cache-Control:
+              $ref: "#/components/headers/CacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "../../schemas/channels/program/program-data-api-created.json"
+        "304":
+          description: Not modified — the cached representation is current.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: >
+            No gold programme row for that identifier. Also returned for a
+            path that adds a sub-resource, since this entity has none.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >
+            Unexpected service failure — AND the deliberate refusal when a
+            programId resolves to more than one row. That is a data defect
+            rather than a caller error, so it is not a 4XX, and the API refuses
+            rather than choosing between two answers. It raises the
+            gold-serving-api-entity-key-not-unique alarm.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "4XX":
+          $ref: "#/components/responses/OtherClientError"
+        "5XX":
+          $ref: "#/components/responses/OtherServerError"
+
+components:
+  securitySchemes:
+    EntraID:
+      type: openIdConnect
+      openIdConnectUrl: https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration
+
+  parameters:
+    ProgramId:
+      name: programId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 256
+      description: >
+        Pearson programme identifier — the SEGMENT1 value, of the form
+        P2XXXXXXXXXXX. The same value the gold programme row and its change
+        events carry. NOT the gold primary key: the gold table merges on
+        (inventoryItemId, organizationId) and this resolves through a secondary
+        index, so uniqueness is measured rather than enforced by storage.
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema:
+        type: string
+      description: A previous response's ETag; a match returns 304.
+
+  headers:
+    ETag:
+      schema:
+        type: string
+      description: >
+        A hash of the representation's own content, never a timestamp. Silent
+        maintenance repairs values without moving the row's update timestamp,
+        so a timestamp-derived ETag would let a revalidating cache 304 past a
+        real change indefinitely.
+    CacheControl:
+      schema:
+        type: string
+      description: Caching directives for this representation.
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials (enforced at the gateway).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    OtherClientError:
+      description: >
+        Any other client error; the specific codes above take precedence. This
+        includes 403 when the gateway's shared backend header is absent or
+        wrong, which surfaces only if a caller bypasses the gateway.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    OtherServerError:
+      description: Any other server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          description: A short, stable description of what went wrong.

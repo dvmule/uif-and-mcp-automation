@@ -1,0 +1,3 @@
+boto3
+moto
+jsonpath_ng

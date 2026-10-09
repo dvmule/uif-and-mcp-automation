@@ -1,0 +1,45 @@
+direction: down
+
+feat: "feature branches - one PR each, merged to develop" {
+  style: { fill: "#fafafa"; stroke: "#9e9e9e"; stroke-dash: 3; font-size: 16 }
+  b1: "post-create-permissions\n77bb945\nPR 425" { shape: rectangle
+    style: { fill: "#e3f2fd"; stroke: "#1565c0"; stroke-width: 2; font-size: 15 } }
+  b2: "uat-cors-origin\n60a16f5\nPR 426" { shape: rectangle
+    style: { fill: "#e3f2fd"; stroke: "#1565c0"; stroke-width: 2; font-size: 15 } }
+  b3: "version-0-2-3\nfef72e5\nPR 427\nVERSION 0.2.2 to 0.2.3" { shape: rectangle
+    style: { fill: "#e3f2fd"; stroke: "#1565c0"; stroke-width: 3; font-size: 15 } }
+  b4: "stacks-ci-timeouts\ncf870e3 + 0f0de8a\nPR 429" { shape: rectangle
+    style: { fill: "#e3f2fd"; stroke: "#1565c0"; stroke-width: 2; font-size: 15 } }
+}
+
+dev: "develop" {
+  style: { fill: "#fafafa"; stroke: "#9e9e9e"; stroke-dash: 3; font-size: 16 }
+  m1: "0b33785" { shape: rectangle
+    style: { fill: "#e8f5e9"; stroke: "#2e7d32"; stroke-width: 2; font-size: 15 } }
+  m2: "dd9e7ae" { shape: rectangle
+    style: { fill: "#e8f5e9"; stroke: "#2e7d32"; stroke-width: 2; font-size: 15 } }
+  m3: "6f78f1c\nthe VERSION bump" { shape: rectangle
+    style: { fill: "#e8f5e9"; stroke: "#2e7d32"; stroke-width: 3; font-size: 15 } }
+  m4: "263b06b\ndevelop HEAD when the\nrelease workflow ran" { shape: rectangle
+    style: { fill: "#e8f5e9"; stroke: "#2e7d32"; stroke-width: 4; font-size: 15 } }
+  m1 -> m2 -> m3 -> m4: { style.stroke: "#2e7d32" }
+}
+
+gate: "stacks-ci gate\nrun 35628548880 - success\n18 blocking gates" {
+  shape: hexagon
+  style: { fill: "#fff3e0"; stroke: "#e65100"; stroke-width: 3; font-size: 16 }
+}
+
+tag: "BUILD TAG   apicurio/v0.2.3\nannotated, cut at 263b06b\n\nmanifest in the annotation:\ngit_commit 263b06b\nbff  sha256:0ec3b9f2...\nui   523a46c5...\nreg  sha256:e9476584..." {
+  shape: rectangle
+  style: { fill: "#ede7f6"; stroke: "#4527a0"; stroke-width: 4; font-size: 16 }
+}
+
+feat.b1 -> dev.m1
+feat.b2 -> dev.m2
+feat.b3 -> dev.m3
+feat.b4 -> dev.m4
+
+dev.m3 -> gate: "VERSION changed, so\nrelease-apicurio.yml fires" { style: { stroke: "#e65100"; stroke-dash: 4; font-size: 14 } }
+dev.m4 -> gate: "but the tag is cut at\nHEAD, not at the bump" { style: { stroke: "#2e7d32"; stroke-width: 2; font-size: 14 } }
+gate -> tag: "gate passed,\nso a tag may be cut" { style: { stroke: "#4527a0"; stroke-width: 3; font-size: 14 } }

@@ -1,0 +1,3 @@
+# Lambda layer archives — ~160 MB of binary, three rebuildable from pip and one
+# a licensed Oracle download. See README.md, which is deliberately not ignored.
+*.zip

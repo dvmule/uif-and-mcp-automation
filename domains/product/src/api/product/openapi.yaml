@@ -56,7 +56,7 @@ info:
     organization carrying that product. Responses are cacheable — honour ETag
     and Cache-Control.
   contact:
-    name: Enterprise Data Connect
+    name: Enterprise Data Connect!
     email: reyasahamed.habibrahman@pearson.com
 # Apicurio registry coordinate — stacks/apicurio/standards/guidelines.md §1,
 # stacks/apicurio/standards/apicurio-governance.md.
